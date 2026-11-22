@@ -122,7 +122,9 @@ private fun VideoPage(item: VideoItem, active: Boolean, repository: FeedReposito
             factory = { ctx ->
                 PlayerView(ctx).apply {
                     useController = false // <-- the "no UI" guarantee
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM // fill screen, crop like TikTok
+                    // FIT = show the WHOLE frame (letterboxed if needed). ZOOM cropped the sides
+                    // of 9:16 videos on tall phones, which read as "picture incomplete".
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                     layoutParams = FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)
                     this.player = player
                 }

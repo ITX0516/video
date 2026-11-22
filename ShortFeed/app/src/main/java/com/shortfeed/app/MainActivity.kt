@@ -19,6 +19,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
@@ -39,16 +40,23 @@ class MainActivity : ComponentActivity() {
         val prefs = Prefs(this)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
-                PickerScreen(
-                    initial = prefs.load(),
-                    onEnter = { cfg ->
-                        prefs.save(cfg)
-                        startActivity(Intent(this, PlayerActivity::class.java).apply {
-                            putStringArrayListExtra(PlayerActivity.EXTRA_ENABLED, ArrayList(cfg.enabled))
-                            putExtra(PlayerActivity.EXTRA_BACKEND_URL, cfg.backendUrl)
-                        })
-                    },
-                )
+                // Surface is required: MaterialTheme alone does not set LocalContentColor, so plain
+                // Text would render black-on-black. Surface wires content color to the theme.
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background,
+                ) {
+                    PickerScreen(
+                        initial = prefs.load(),
+                        onEnter = { cfg ->
+                            prefs.save(cfg)
+                            startActivity(Intent(this, PlayerActivity::class.java).apply {
+                                putStringArrayListExtra(PlayerActivity.EXTRA_ENABLED, ArrayList(cfg.enabled))
+                                putExtra(PlayerActivity.EXTRA_BACKEND_URL, cfg.backendUrl)
+                            })
+                        },
+                    )
+                }
             }
         }
     }
