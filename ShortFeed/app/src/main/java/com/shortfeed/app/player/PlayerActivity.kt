@@ -31,6 +31,7 @@ class PlayerActivity : ComponentActivity() {
 
     private lateinit var repository: FeedRepository
     private var douyinBridge: DouyinWebBridge? = null
+    private var biliSource: BiliSource? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -44,14 +45,20 @@ class PlayerActivity : ComponentActivity() {
         val enabled = intent.getStringArrayListExtra(EXTRA_ENABLED) ?: arrayListOf(KEY_BILIBILI)
         val baseUrl = intent.getStringExtra(EXTRA_BACKEND_URL).orEmpty()
         val prefs = Prefs(this)
-        repository = FeedRepository(buildSources(enabled, baseUrl))
+        repository = FeedRepository(buildSources(enabled, baseUrl, prefs))
 
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 PlayerScreen(
                     repository = repository,
-                    onToggleLike = { item ->
-                        val liked = prefs.toggleLike(item.platform.name + ":" + item.id)
+                    initialQuality = prefs.loadBiliQuality(),
+                    onQualityChange = { qn ->
+                        prefs.saveBiliQuality(qn)
+                        biliSource?.setQuality(qn)
+                        repository.clearResolvedUrls()
+                    },
+                    onToggleLike = { item, url ->
+                        val liked = prefs.toggleLike(item.copy(playUrl = url))
                         // Hybrid: keep the local like immediately; best-effort mirror it to the
                         // account when this is a Douyin item in the live web session.
                         if (liked && item.platform == Platform.DOUYIN) {
@@ -59,8 +66,8 @@ class PlayerActivity : ComponentActivity() {
                         }
                         liked
                     },
-                    onToggleFavorite = { item ->
-                        prefs.toggleFavorite(item.platform.name + ":" + item.id)
+                    onToggleFavorite = { item, url ->
+                        prefs.toggleFavorite(item.copy(playUrl = url))
                     },
                     onSwitchDouyinTab = { toFollowing ->
                         val bridge = douyinBridge
@@ -113,11 +120,12 @@ class PlayerActivity : ComponentActivity() {
         return super.dispatchKeyEvent(event)
     }
 
-    private fun buildSources(enabled: List<String>, baseUrl: String): List<VideoSource> {
+    private fun buildSources(enabled: List<String>, baseUrl: String, prefs: Prefs): List<VideoSource> {
         val list = mutableListOf<VideoSource>()
         if (KEY_BILIBILI in enabled) {
             // SESSDATA (if the user logged in) switches the rcmd feed from anonymous to personal.
-            list += BiliSource(com.shortfeed.app.Prefs(this).loadBiliSession())
+            list += BiliSource(prefs.loadBiliSession(), prefs.loadBiliQuality())
+                .also { biliSource = it }
         }
         if (KEY_DOUYIN in enabled) {
             if (baseUrl.isNotEmpty()) {

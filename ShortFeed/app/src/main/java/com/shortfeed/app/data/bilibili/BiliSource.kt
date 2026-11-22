@@ -17,7 +17,15 @@ import java.util.concurrent.TimeUnit
  * WBI keys are cached and refreshed on risk-control responses, so daily key rotation is handled
  * automatically.
  */
-class BiliSource(private val sessdata: String = "") : VideoSource {
+class BiliSource(private val sessdata: String = "", quality: Int = 64) : VideoSource {
+
+    /** Bilibili qn code. Changed at runtime from the player's quality row. */
+    @Volatile
+    var quality: Int = quality
+
+    fun setQuality(qn: Int) {
+        quality = qn
+    }
 
     override val key: String = "bilibili"
     override val platform: Platform = Platform.BILIBILI
@@ -130,7 +138,7 @@ class BiliSource(private val sessdata: String = "") : VideoSource {
         val params = mapOf(
             "bvid" to bvid,
             "cid" to cid.toString(),
-            "qn" to "64",        // 720P
+            "qn" to quality.toString(),
             "fnval" to "0",      // single MP4 (durl) — simplest for a direct video URL
             "fnver" to "0",
             "fourk" to "1",

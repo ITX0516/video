@@ -25,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -67,6 +68,14 @@ enum class ScaleMode(val label: String, val resizeMode: Int) {
 private const val MIN_ZOOM = 1f
 private const val MAX_ZOOM = 3f
 
+/** Bilibili qn codes. 1080P needs a logged-in account to actually be granted. */
+private val QUALITY_OPTIONS = listOf(
+    "360P" to 16,
+    "480P" to 32,
+    "720P" to 64,
+    "1080P" to 80,
+)
+
 /** Pinch state: scale plus pan offset in pixels. Shared by every video (carries over on swipe). */
 private data class FrameTransform(
     val scale: Float = 1f,
@@ -82,8 +91,10 @@ private data class FrameTransform(
 @Composable
 fun PlayerScreen(
     repository: FeedRepository,
-    onToggleLike: (VideoItem) -> Boolean = { false },
-    onToggleFavorite: (VideoItem) -> Boolean = { false },
+    initialQuality: Int = 64,
+    onQualityChange: (Int) -> Unit = {},
+    onToggleLike: (VideoItem, String) -> Boolean = { _, _ -> false },
+    onToggleFavorite: (VideoItem, String) -> Boolean = { _, _ -> false },
     onSwitchDouyinTab: (Boolean) -> String? = { null },
 ) {
     val context = LocalContext.current
@@ -98,8 +109,20 @@ fun PlayerScreen(
     // One transform for all videos: the zoom/pan you set carries over when you swipe to the next one.
     var transform by remember { mutableStateOf(FrameTransform()) }
     val isDouyin = activeKey == "douyin"
+    val isBilibili = activeKey == "bilibili"
     val currentItem = items.getOrNull(pagerState.currentPage)
     val latestItems by rememberUpdatedState(items)
+
+    // Last resolved play URL per item id, so that like/favourite can persist something replayable.
+    val playUrls = remember { mutableStateMapOf<String, String>() }
+    var quality by remember { mutableStateOf(initialQuality) }
+    var qualityVersion by remember { mutableStateOf(0) }
+    fun applyQuality(qn: Int) {
+        if (qn == quality) return
+        quality = qn
+        qualityVersion++
+        onQualityChange(qn)
+    }
 
     // Hiding the UI is sticky across videos. Back brings the controls back; when they are already
     // visible the system default (exit the player) applies.
@@ -182,6 +205,8 @@ fun PlayerScreen(
                         repository = repository,
                         scaleMode = scaleMode,
                         transform = transform,
+                        qualityVersion = qualityVersion,
+                        onResolved = { playUrls[item.id] = it },
                     )
                 }
             }
@@ -198,11 +223,20 @@ fun PlayerScreen(
                 onResetZoom = { transform = FrameTransform() },
                 onHide = { controlsVisible = false },
                 onLike = {
-                    currentItem?.let { showFlash(if (onToggleLike(it)) "♥" else "♡") }
+                    currentItem?.let {
+                        val url = playUrls[it.id] ?: it.playUrl
+                        showFlash(if (onToggleLike(it, url)) "♥" else "♡")
+                    }
                 },
                 onFavorite = {
-                    currentItem?.let { showFlash(if (onToggleFavorite(it)) "★ 收藏" else "☆ 取消") }
+                    currentItem?.let {
+                        val url = playUrls[it.id] ?: it.playUrl
+                        showFlash(if (onToggleFavorite(it, url)) "★ 收藏" else "☆ 取消")
+                    }
                 },
+                showQuality = isBilibili,
+                quality = quality,
+                onQuality = { applyQuality(it) },
                 tabSwitch = if (isDouyin) {
                     {
                         onSwitchDouyinTab(!douyinFollowing)?.let { label ->
@@ -252,6 +286,9 @@ private fun ControlsPanel(
     onHide: () -> Unit,
     onLike: () -> Unit,
     onFavorite: () -> Unit,
+    showQuality: Boolean,
+    quality: Int,
+    onQuality: (Int) -> Unit,
     tabSwitch: (() -> Unit)?,
     tabTarget: String,
     modifier: Modifier = Modifier,
@@ -306,6 +343,24 @@ private fun ControlsPanel(
                     }
                 }
             }
+            if (showQuality) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "清晰度",
+                        color = Color.White,
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 8.dp),
+                    )
+                    QUALITY_OPTIONS.forEach { (label, qn) ->
+                        TextButton(onClick = { onQuality(qn) }) {
+                            Text(
+                                text = label,
+                                color = if (qn == quality) Color(0xFFD0BCFF) else Color.White,
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -317,9 +372,11 @@ private fun VideoPage(
     repository: FeedRepository,
     scaleMode: ScaleMode,
     transform: FrameTransform,
+    qualityVersion: Int,
+    onResolved: (String) -> Unit,
 ) {
     val context = LocalContext.current
-    var playUrl by remember(item.id) { mutableStateOf(item.playUrl) }
+    var playUrl by remember(item.id, qualityVersion) { mutableStateOf(item.playUrl) }
 
     // One player per page, with the request headers each platform's CDN demands.
     val player = remember(item.id) {
@@ -336,17 +393,22 @@ private fun VideoPage(
     }
 
     // Resolve the direct URL lazily (cached by the repository) when this page becomes active.
-    LaunchedEffect(item.id, active) {
+    LaunchedEffect(item.id, active, qualityVersion) {
         if (active && playUrl.isEmpty()) {
             val url = repository.resolvePlayUrl(item)
-            if (url.isNotEmpty()) playUrl = url
+            if (url.isNotEmpty()) {
+                playUrl = url
+                onResolved(url)
+            }
         }
     }
 
     // Attach media once a URL is known, and (re)start/pause with page activity.
     LaunchedEffect(playUrl, active) {
         if (playUrl.isEmpty()) return@LaunchedEffect
-        if (player.mediaItemCount == 0) {
+        if (player.currentMediaItem == null ||
+            player.currentMediaItem?.localConfiguration?.uri?.toString() != playUrl
+        ) {
             player.setMediaItem(MediaItem.fromUri(playUrl))
             player.prepare()
         }

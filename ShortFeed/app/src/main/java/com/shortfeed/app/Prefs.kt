@@ -2,8 +2,11 @@ package com.shortfeed.app
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.shortfeed.app.data.Platform
+import com.shortfeed.app.data.VideoItem
+import org.json.JSONObject
 
-/** Persists the picker selection so re-launching skips reconfiguration. */
+/** Persists the picker selection, login cookie, local likes/favourites and player prefs. */
 class Prefs(context: Context) {
     private val sp: SharedPreferences =
         context.getSharedPreferences("shortfeed", Context.MODE_PRIVATE)
@@ -35,26 +38,84 @@ class Prefs(context: Context) {
         sp.edit().putString(KEY_BILI_SESS, sessdata).apply()
     }
 
-    /** Local like state, keyed by "PLATFORM:videoId". Returns true when it is now liked. */
-    fun toggleLike(key: String): Boolean = toggle(KEY_LIKES, key)
+    /** Preferred Bilibili quality (qn). 64 = 720P. */
+    fun loadBiliQuality(): Int = sp.getInt(KEY_BILI_QN, 64)
 
-    fun isLiked(key: String): Boolean = sp.getStringSet(KEY_LIKES, emptySet()).orEmpty().contains(key)
+    fun saveBiliQuality(qn: Int) {
+        sp.edit().putInt(KEY_BILI_QN, qn).apply()
+    }
 
-    /** Local favourite state. Returns true when it is now favourited. */
-    fun toggleFavorite(key: String): Boolean = toggle(KEY_FAVS, key)
+    // ---- local likes / favourites ----
 
-    fun isFavorite(key: String): Boolean = sp.getStringSet(KEY_FAVS, emptySet()).orEmpty().contains(key)
+    fun isLiked(item: VideoItem): Boolean = contains(KEY_LIKES, keyOf(item))
 
-    private fun toggle(prefKey: String, key: String): Boolean {
-        val cur = sp.getStringSet(prefKey, emptySet()).orEmpty().toMutableSet()
-        val nowOn = if (!cur.add(key)) {
-            cur.remove(key)
+    fun isFavorite(item: VideoItem): Boolean = contains(KEY_FAVS, keyOf(item))
+
+    /** Toggles the local like and remembers enough metadata to list / replay it later. */
+    fun toggleLike(item: VideoItem): Boolean = toggle(KEY_LIKES, KEY_LIKE_META, item)
+
+    fun toggleFavorite(item: VideoItem): Boolean = toggle(KEY_FAVS, KEY_FAV_META, item)
+
+    fun likedItems(): List<VideoItem> = readMeta(KEY_LIKE_META)
+
+    fun favoriteItems(): List<VideoItem> = readMeta(KEY_FAV_META)
+
+    private fun keyOf(item: VideoItem): String = "${item.platform.name}:${item.id}"
+
+    private fun contains(setKey: String, key: String): Boolean =
+        sp.getStringSet(setKey, emptySet()).orEmpty().contains(key)
+
+    private fun toggle(setKey: String, metaKey: String, item: VideoItem): Boolean {
+        val key = keyOf(item)
+        val ids = sp.getStringSet(setKey, emptySet()).orEmpty().toMutableSet()
+        val nowOn = if (!ids.add(key)) {
+            ids.remove(key)
             false
         } else {
             true
         }
-        sp.edit().putStringSet(prefKey, cur).apply()
+        val meta = JSONObject(sp.getString(metaKey, "{}").orEmpty())
+        if (nowOn) {
+            meta.put(
+                key,
+                JSONObject()
+                    .put("id", item.id)
+                    .put("platform", item.platform.name)
+                    .put("title", item.title)
+                    .put("author", item.author)
+                    .put("cover", item.cover)
+                    .put("url", item.playUrl)
+                    .put("at", System.currentTimeMillis()),
+            )
+        } else {
+            meta.remove(key)
+        }
+        sp.edit()
+            .putStringSet(setKey, ids)
+            .putString(metaKey, meta.toString())
+            .apply()
         return nowOn
+    }
+
+    private fun readMeta(metaKey: String): List<VideoItem> {
+        val meta = JSONObject(sp.getString(metaKey, "{}").orEmpty())
+        val out = mutableListOf<Pair<Long, VideoItem>>()
+        val keys = meta.keys()
+        while (keys.hasNext()) {
+            val obj = meta.optJSONObject(keys.next()) ?: continue
+            val platform = runCatching { Platform.valueOf(obj.optString("platform")) }
+                .getOrDefault(Platform.BILIBILI)
+            out += obj.optLong("at") to VideoItem(
+                id = obj.optString("id"),
+                platform = platform,
+                title = obj.optString("title"),
+                author = obj.optString("author"),
+                cover = obj.optString("cover"),
+                playUrl = obj.optString("url"),
+                sourceKey = "library",
+            )
+        }
+        return out.sortedByDescending { it.first }.map { it.second }
     }
 
     companion object {
@@ -62,7 +123,10 @@ class Prefs(context: Context) {
         private const val KEY_URL = "backend_url"
         private const val KEY_SCALE = "scale_mode"
         private const val KEY_BILI_SESS = "bili_sessdata"
+        private const val KEY_BILI_QN = "bili_qn"
         private const val KEY_LIKES = "liked_ids"
         private const val KEY_FAVS = "fav_ids"
+        private const val KEY_LIKE_META = "liked_meta"
+        private const val KEY_FAV_META = "fav_meta"
     }
 }

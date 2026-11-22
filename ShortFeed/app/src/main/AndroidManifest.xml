@@ -39,6 +39,17 @@
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:theme="@style/Theme.ShortFeed.Immersive" />
 
+        <!-- Locally remembered likes / favourites. -->
+        <activity
+            android:name=".library.LibraryActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:theme="@style/Theme.ShortFeed" />
+
+        <activity
+            android:name=".library.LibraryPlayerActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:theme="@style/Theme.ShortFeed.Immersive" />
+
     </application>
 
 </manifest>

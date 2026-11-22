@@ -31,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.shortfeed.app.library.LibraryActivity
 import com.shortfeed.app.player.PlayerActivity
 import com.shortfeed.app.web.BiliLoginActivity
 import com.shortfeed.app.web.DouyinWebActivity
@@ -64,6 +65,9 @@ class MainActivity : ComponentActivity() {
                         onBiliLogin = {
                             startActivity(Intent(this, BiliLoginActivity::class.java))
                         },
+                        onOpenLibrary = {
+                            startActivity(Intent(this, LibraryActivity::class.java))
+                        },
                     )
                 }
             }
@@ -79,6 +83,7 @@ private fun PickerScreen(
     onEnter: (FeedConfig) -> Unit,
     onOpenDouyinWeb: () -> Unit,
     onBiliLogin: () -> Unit,
+    onOpenLibrary: () -> Unit,
 ) {
     var bili by remember { mutableStateOf(PlayerActivity.KEY_BILIBILI in initial.enabled) }
     var douyin by remember { mutableStateOf(PlayerActivity.KEY_DOUYIN in initial.enabled) }
@@ -130,6 +135,11 @@ private fun PickerScreen(
             onClick = onBiliLogin,
             modifier = Modifier.fillMaxWidth(),
         ) { Text("Bilibili 登录（个性化推荐流）") }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            onClick = onOpenLibrary,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("我的赞 / 收藏") }
         Spacer(Modifier.height(8.dp))
         Text(
             "提示：播放中用音量键切换内容源；屏幕上没有任何控件。\n" +

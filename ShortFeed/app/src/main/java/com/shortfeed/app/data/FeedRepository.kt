@@ -45,6 +45,11 @@ class FeedRepository(private val sources: List<VideoSource>) {
         _activeKey.value = activeSource?.key ?: ""
     }
 
+    /** Drops cached play URLs so they are resolved again (e.g. after a quality change). */
+    fun clearResolvedUrls() {
+        resolvedUrls.clear()
+    }
+
     suspend fun refresh() {
         _items.value = emptyList()
         cursors.clear()
