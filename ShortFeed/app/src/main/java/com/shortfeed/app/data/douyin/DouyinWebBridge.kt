@@ -115,6 +115,33 @@ class DouyinWebBridge(private val activity: Activity) {
         }
     }
 
+    /** Clears buffered items. Call when the page switches feed (推荐 ⇄ 关注). */
+    fun resetBuffer() {
+        queue.clear()
+        seen.clear()
+    }
+
+    /** Switches the page between the 推荐 and 关注 tabs, which makes it fetch a different feed. */
+    fun switchTab(following: Boolean) {
+        resetBuffer()
+        val label = if (following) "关注" else "推荐"
+        activity.runOnUiThread {
+            webView.evaluateJavascript(tabJs(label), null)
+        }
+    }
+
+    /**
+     * Best-effort real like. The page is a virtualised list, so the item we are playing may already
+     * be unmounted — in that case nothing is clicked (the caller keeps the local like).
+     */
+    fun likeAweme(awemeId: String, onResult: (Boolean) -> Unit) {
+        activity.runOnUiThread {
+            webView.evaluateJavascript(likeJs(awemeId)) { r ->
+                onResult(r?.trim()?.trim('"') == "ok")
+            }
+        }
+    }
+
     fun onResume() = webView.onResume()
 
     fun onPause() = webView.onPause()
@@ -129,6 +156,48 @@ class DouyinWebBridge(private val activity: Activity) {
         url.startsWith("//") -> "https:$url"
         else -> url
     }
+
+    /** Clicks the tab whose visible text is exactly [label]. */
+    private fun tabJs(label: String): String = """
+        (function(){
+          var want = '$label';
+          var all = document.querySelectorAll('span,div,a,li,button');
+          for (var i = 0; i < all.length; i++) {
+            var el = all[i];
+            if (el.children.length > 0) continue;
+            if ((el.innerText || '').trim() !== want) continue;
+            if (!el.offsetParent) continue;
+            var t = el.closest('[role="tab"],a,button,li') || el;
+            t.click();
+            return 'ok';
+          }
+          return 'nf';
+        })();
+    """
+
+    /** Finds the DOM node of [awemeId] (if still mounted) and clicks its like button. */
+    private fun likeJs(awemeId: String): String = """
+        (function(){
+          var id = '$awemeId';
+          var nodes = document.querySelectorAll('a[href*="/video/' + id + '"]');
+          var root = null;
+          for (var i = 0; i < nodes.length; i++) {
+            if (nodes[i].offsetParent) { root = nodes[i]; break; }
+          }
+          if (!root) return 'no-item';
+          var r = root;
+          while (r && r !== document.body) {
+            var b = r.querySelector('[data-e2e="video-player-digg"],[data-e2e*="digg"],[aria-label*="点赞"]');
+            if (b) {
+              if ((b.getAttribute('aria-pressed') || '') === 'true') return 'already';
+              b.click();
+              return 'ok';
+            }
+            r = r.parentElement;
+          }
+          return 'no-btn';
+        })();
+    """
 
     companion object {
         const val KEY = "douyin"

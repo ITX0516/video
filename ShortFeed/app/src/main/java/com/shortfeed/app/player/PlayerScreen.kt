@@ -29,14 +29,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
@@ -49,6 +53,7 @@ import com.shortfeed.app.Prefs
 import com.shortfeed.app.data.FeedRepository
 import com.shortfeed.app.data.Platform
 import com.shortfeed.app.data.VideoItem
+import kotlinx.coroutines.delay
 
 /** How the video frame maps onto the screen. Persisted across launches. */
 enum class ScaleMode(val label: String, val resizeMode: Int) {
@@ -72,7 +77,12 @@ private const val ZOOM_STEP = 0.25f
  * also zooms, without stealing the single-finger vertical swipe.
  */
 @Composable
-fun PlayerScreen(repository: FeedRepository) {
+fun PlayerScreen(
+    repository: FeedRepository,
+    onToggleLike: (VideoItem) -> Boolean = { false },
+    onToggleFavorite: (VideoItem) -> Boolean = { false },
+    onSwitchDouyinTab: () -> String? = { null },
+) {
     val context = LocalContext.current
     val prefs = remember { Prefs(context.applicationContext) }
     val items by repository.items.collectAsStateWithLifecycle()
@@ -82,6 +92,23 @@ fun PlayerScreen(repository: FeedRepository) {
     var scaleMode by remember { mutableStateOf(ScaleMode.fromKey(prefs.loadScaleMode())) }
     var zoom by remember { mutableFloatStateOf(1f) }
     var controlsVisible by remember { mutableStateOf(true) }
+
+    // Current item, kept fresh for the gesture closures without restarting pointerInput.
+    val latestItem by rememberUpdatedState(items.getOrNull(pagerState.currentPage))
+
+    // Transient feedback (♥ / ★ / tab name) — the only "UI" allowed in immersive mode.
+    var flash by remember { mutableStateOf<String?>(null) }
+    var flashSeq by remember { mutableStateOf(0) }
+    LaunchedEffect(flashSeq) {
+        if (flashSeq > 0) {
+            delay(900)
+            flash = null
+        }
+    }
+    fun showFlash(text: String) {
+        flash = text
+        flashSeq++
+    }
 
     // (Re)load the active source whenever it changes (volume-key switching) — includes first load.
     LaunchedEffect(activeKey) { repository.loadMore() }
@@ -141,7 +168,40 @@ fun PlayerScreen(repository: FeedRepository) {
                     }
                 }
                 .pointerInput(Unit) {
-                    detectTapGestures { controlsVisible = true }
+                    detectTapGestures(
+                        onTap = { controlsVisible = true },
+                        onDoubleTap = {
+                            latestItem?.let { item ->
+                                showFlash(if (onToggleLike(item)) "♥" else "♡")
+                            }
+                        },
+                        onLongPress = {
+                            latestItem?.let { item ->
+                                showFlash(if (onToggleFavorite(item)) "★ 收藏" else "☆ 取消")
+                            }
+                        },
+                    )
+                }
+                .pointerInput(Unit) {
+                    // Two-finger double tap → 推荐 ⇄ 关注. Observed at the Initial pass without
+                    // consuming, so pinch-zoom keeps working.
+                    var lastTwoFingerDown = 0L
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            if (event.type == PointerEventType.Press &&
+                                event.changes.count { it.pressed } == 2
+                            ) {
+                                val now = System.currentTimeMillis()
+                                if (now - lastTwoFingerDown in 1..450) {
+                                    lastTwoFingerDown = 0L
+                                    onSwitchDouyinTab()?.let { showFlash("切换到「$it」") }
+                                } else {
+                                    lastTwoFingerDown = now
+                                }
+                            }
+                        }
+                    }
                 }
         )
 
@@ -159,6 +219,27 @@ fun PlayerScreen(repository: FeedRepository) {
                     .align(Alignment.TopEnd)
                     .padding(16.dp),
             )
+        }
+
+        // Transient feedback only — not interactive, does not block taps.
+        flash?.let { text ->
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(28.dp),
+                    color = Color.Black.copy(alpha = 0.45f),
+                    contentColor = Color.White,
+                ) {
+                    Text(
+                        text = text,
+                        fontSize = if (text.length <= 2) 64.sp else 22.sp,
+                        color = if (text.startsWith("♥")) Color(0xFFFF4D6A) else Color.White,
+                        modifier = Modifier.padding(horizontal = 28.dp, vertical = 18.dp),
+                    )
+                }
+            }
         }
     }
 }

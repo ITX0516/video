@@ -11,6 +11,8 @@ import androidx.compose.material3.darkColorScheme
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.lifecycleScope
+import com.shortfeed.app.Prefs
 import com.shortfeed.app.data.FeedRepository
 import com.shortfeed.app.data.Platform
 import com.shortfeed.app.data.VideoSource
@@ -19,6 +21,7 @@ import com.shortfeed.app.data.bilibili.BiliSource
 import com.shortfeed.app.data.douyin.DouyinWebBridge
 import com.shortfeed.app.data.douyin.DouyinWebSource
 import com.shortfeed.app.data.fixture.FixtureSource
+import kotlinx.coroutines.launch
 
 /**
  * Hosts the zero-chrome player. Source switching is hardware-driven (volume keys) so the screen
@@ -28,6 +31,7 @@ class PlayerActivity : ComponentActivity() {
 
     private lateinit var repository: FeedRepository
     private var douyinBridge: DouyinWebBridge? = null
+    private var followingTab = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -40,11 +44,37 @@ class PlayerActivity : ComponentActivity() {
 
         val enabled = intent.getStringArrayListExtra(EXTRA_ENABLED) ?: arrayListOf(KEY_BILIBILI)
         val baseUrl = intent.getStringExtra(EXTRA_BACKEND_URL).orEmpty()
+        val prefs = Prefs(this)
         repository = FeedRepository(buildSources(enabled, baseUrl))
 
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
-                PlayerScreen(repository)
+                PlayerScreen(
+                    repository = repository,
+                    onToggleLike = { item ->
+                        val liked = prefs.toggleLike(item.platform.name + ":" + item.id)
+                        // Hybrid: keep the local like immediately; best-effort mirror it to the
+                        // account when this is a Douyin item in the live web session.
+                        if (liked && item.platform == Platform.DOUYIN) {
+                            douyinBridge?.likeAweme(item.id) { /* best-effort */ }
+                        }
+                        liked
+                    },
+                    onToggleFavorite = { item ->
+                        prefs.toggleFavorite(item.platform.name + ":" + item.id)
+                    },
+                    onSwitchDouyinTab = {
+                        val bridge = douyinBridge
+                        if (bridge != null && repository.activeSource?.platform == Platform.DOUYIN) {
+                            followingTab = !followingTab
+                            bridge.switchTab(followingTab)
+                            lifecycleScope.launch { repository.refresh() }
+                            if (followingTab) "关注" else "推荐"
+                        } else {
+                            null
+                        }
+                    },
+                )
             }
         }
 

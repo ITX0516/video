@@ -35,10 +35,34 @@ class Prefs(context: Context) {
         sp.edit().putString(KEY_BILI_SESS, sessdata).apply()
     }
 
+    /** Local like state, keyed by "PLATFORM:videoId". Returns true when it is now liked. */
+    fun toggleLike(key: String): Boolean = toggle(KEY_LIKES, key)
+
+    fun isLiked(key: String): Boolean = sp.getStringSet(KEY_LIKES, emptySet()).orEmpty().contains(key)
+
+    /** Local favourite state. Returns true when it is now favourited. */
+    fun toggleFavorite(key: String): Boolean = toggle(KEY_FAVS, key)
+
+    fun isFavorite(key: String): Boolean = sp.getStringSet(KEY_FAVS, emptySet()).orEmpty().contains(key)
+
+    private fun toggle(prefKey: String, key: String): Boolean {
+        val cur = sp.getStringSet(prefKey, emptySet()).orEmpty().toMutableSet()
+        val nowOn = if (!cur.add(key)) {
+            cur.remove(key)
+            false
+        } else {
+            true
+        }
+        sp.edit().putStringSet(prefKey, cur).apply()
+        return nowOn
+    }
+
     companion object {
         private const val KEY_ENABLED = "enabled"
         private const val KEY_URL = "backend_url"
         private const val KEY_SCALE = "scale_mode"
         private const val KEY_BILI_SESS = "bili_sessdata"
+        private const val KEY_LIKES = "liked_ids"
+        private const val KEY_FAVS = "fav_ids"
     }
 }
