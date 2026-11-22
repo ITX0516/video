@@ -26,9 +26,16 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # AGP 8.7 + compileSdk 35 need a working Android SDK with accepted licenses.
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # The ubuntu runner ships a preinstalled Android SDK ($ANDROID_HOME) with recent
+      # platforms + accepted licenses. Re-accept licenses defensively; AGP auto-downloads
+      # anything still missing. (We avoid android-actions/setup-android@v3 here: it shells
+      # out to `sdkmanager tools`, but the `tools` package was removed from the SDK repo,
+      # so that action currently exits non-zero and breaks the build.)
+      - name: Accept Android SDK licenses
+        run: |
+          SM="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$SM" ] || SM="$(command -v sdkmanager || true)"
+          [ -n "$SM" ] && yes | "$SM" --licenses >/dev/null 2>&1 || true
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
