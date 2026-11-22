@@ -3,6 +3,8 @@ package com.shortfeed.app.player
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.widget.FrameLayout
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
@@ -48,6 +50,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -160,7 +163,7 @@ fun PlayerScreen(
 
     // On page change: pre-resolve the next few videos' URLs, and load more feed near the end.
     LaunchedEffect(pagerState.currentPage, items.size) {
-        repository.prefetch(pagerState.currentPage, lookahead = 2)
+        repository.prefetch(pagerState.currentPage, lookahead = 3)
         if (items.isNotEmpty() && pagerState.currentPage >= items.size - 3) {
             repository.loadMore()
         }
@@ -178,6 +181,8 @@ fun PlayerScreen(
             )
             else -> VerticalPager(
                 state = pagerState,
+                // Keep neighbouring pages composed so their players are already prepared.
+                beyondViewportPageCount = 1,
                 modifier = Modifier
                     .fillMaxSize()
                     .pointerInput(Unit) {
@@ -390,14 +395,19 @@ private fun ControlsPanel(
                 }
             }
             if (douyinOptions.isNotEmpty()) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                ) {
                     Text(
                         text = "清晰度",
                         color = Color.White,
                         style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(horizontal = 8.dp),
                     )
-                    listOf("自动" to "").plus(douyinOptions.map { it to it }).forEach { (label, value) ->
+                    val qualityChoices = listOf("自动" to "", "最低" to "最低") +
+                        douyinOptions.map { it to it }
+                    qualityChoices.forEach { (label, value) ->
                         TextButton(onClick = { onDouyinQuality(value) }) {
                             Text(
                                 text = label,
@@ -424,20 +434,28 @@ private fun VideoPage(
     onResolved: (String) -> Unit,
 ) {
     val context = LocalContext.current
-    // Douyin ships several renditions; honour the chosen one, else the feed's default address.
-    val preferredUrl = remember(item.id, dyQuality) {
-        item.variants.firstOrNull { it.label == dyQuality }?.url?.takeIf { it.isNotEmpty() }
-            ?: item.playUrl
-    }
-    var playUrl by remember(item.id, qualityVersion) { mutableStateOf(preferredUrl) }
+    // Douyin ships several renditions: honour the chosen one, and if this video lacks it,
+    // fall back to the nearest lower rendition (or the lowest) instead of stalling.
+    val preferredUrl = remember(item.id, dyQuality) { pickVideoUrl(item, dyQuality) }
+    var playUrl by remember(item.id, qualityVersion, dyQuality) { mutableStateOf(preferredUrl) }
 
     // One player per page, with the request headers each platform's CDN demands.
+    // Buffer targets are tuned for quick starts while swiping, not for long-form playback.
     val player = remember(item.id) {
         val dataSourceFactory = DefaultHttpDataSource.Factory()
             .setUserAgent(DESKTOP_UA) // mobile & ExoPlayer default UAs get 403 from these CDNs
             .setDefaultRequestProperties(refererFor(item.platform))
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                /* minBufferMs = */ 8_000,
+                /* maxBufferMs = */ 20_000,
+                /* bufferForPlaybackMs = */ 800,
+                /* bufferForPlaybackAfterRebufferMs = */ 1_500,
+            )
+            .build()
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+            .setLoadControl(loadControl)
             .build()
     }
 
@@ -490,9 +508,10 @@ private fun VideoPage(
         }
     }
 
-    // Resolve the direct URL lazily (cached by the repository) when this page becomes active.
-    LaunchedEffect(item.id, active, qualityVersion) {
-        if (active && playUrl.isEmpty()) {
+    // Resolve the direct URL as soon as the page is composed (also for the preloaded neighbours),
+    // so swiping to an already-composed page never waits on resolution.
+    LaunchedEffect(item.id, qualityVersion) {
+        if (playUrl.isEmpty()) {
             val url = repository.resolvePlayUrl(item)
             if (url.isNotEmpty()) {
                 playUrl = url
@@ -616,6 +635,28 @@ private fun VideoPage(
 }
 
 private enum class LoadState { Loading, Ready, Error }
+
+/** Numeric part of a rendition label ("720P" -> 720), used for nearest-match fallback. */
+private fun qualityNumber(label: String): Int = label.filter { it.isDigit() }.toIntOrNull() ?: 0
+
+/**
+ * Pick the direct URL for a video under the current Douyin quality preference.
+ * "最低" always takes the lowest available rendition; a preferred rendition the video does not
+ * offer degrades to the nearest lower one (or the lowest), never to an empty/black page.
+ */
+private fun pickVideoUrl(item: VideoItem, dyQuality: String): String {
+    val variants = item.variants.filter { it.url.isNotEmpty() }
+    if (variants.isEmpty()) return item.playUrl
+    val sorted = variants.sortedBy { qualityNumber(it.label) }
+    if (dyQuality == "最低") return sorted.first().url
+    variants.firstOrNull { it.label == dyQuality }?.let { return it.url }
+    if (dyQuality.isEmpty() || dyQuality == "自动") {
+        return item.playUrl.ifEmpty { sorted.last().url }
+    }
+    val target = qualityNumber(dyQuality)
+    val lowerOrEqual = sorted.filter { qualityNumber(it.label) <= target }.lastOrNull()
+    return (lowerOrEqual ?: sorted.first()).url
+}
 
 private const val DESKTOP_UA =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
