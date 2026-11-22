@@ -3,7 +3,10 @@ package com.shortfeed.app.player
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.widget.FrameLayout
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -22,14 +25,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -61,13 +67,18 @@ enum class ScaleMode(val label: String, val resizeMode: Int) {
 
 private const val MIN_ZOOM = 1f
 private const val MAX_ZOOM = 3f
-private const val ZOOM_STEP = 0.25f
+
+/** Per-video pinch state: scale plus pan offset in pixels. Kept for the session, per video id. */
+private data class FrameTransform(
+    val scale: Float = 1f,
+    val offset: Offset = Offset.Zero,
+)
 
 /**
  * The entire in-app surface: a full-screen vertical pager of videos.
- * A small translucent panel (top-right) picks the picture mode / zoom and can be dismissed with
- * 「隐藏全部 UI」; after that the screen is 100% video and a tap brings it back. Two-finger pinch
- * also zooms, without stealing the single-finger vertical swipe.
+ * A small translucent panel (top-right) picks the picture mode; 「隐藏全部 UI」 keeps the screen
+ * fully video from then on, and the back key brings the panel back. Pinch with two fingers to
+ * zoom and drag with two fingers to pan — single-finger paging is never intercepted.
  */
 @Composable
 fun PlayerScreen(
@@ -83,11 +94,14 @@ fun PlayerScreen(
     val pagerState = rememberPagerState(pageCount = { items.size })
 
     var scaleMode by remember { mutableStateOf(ScaleMode.fromKey(prefs.loadScaleMode())) }
-    var zoom by remember { mutableFloatStateOf(1f) }
     var controlsVisible by remember { mutableStateOf(true) }
     var douyinFollowing by remember { mutableStateOf(false) }
+    // Zoom/pan is remembered per video, so a swiped-away video comes back exactly as you left it.
+    val transforms = remember { mutableStateMapOf<String, FrameTransform>() }
     val isDouyin = activeKey == "douyin"
     val currentItem = items.getOrNull(pagerState.currentPage)
+    val currentTransform = currentItem?.let { transforms[it.id] } ?: FrameTransform()
+    val latestItems by rememberUpdatedState(items)
 
     // Hiding the UI is sticky across videos. Back brings the controls back; when they are already
     // visible the system default (exit the player) applies.
@@ -130,16 +144,48 @@ fun PlayerScreen(
             )
             else -> VerticalPager(
                 state = pagerState,
-                modifier = Modifier.fillMaxSize(),
-                beyondViewportPageCount = 1, // keep the adjacent page composed for seamless swipe
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        // Two fingers only: pinch to scale, drag to pan. Single-finger events are
+                        // never touched, so vertical paging stays exactly as before.
+                        awaitEachGesture {
+                            awaitFirstDown(requireUnconsumed = false)
+                            do {
+                                val event = awaitPointerEvent()
+                                if (event.changes.count { it.pressed } >= 2) {
+                                    val id = latestItems.getOrNull(pagerState.currentPage)?.id
+                                        ?: return@awaitEachGesture
+                                    val cur = transforms[id] ?: FrameTransform()
+                                    val dZoom = event.calculateZoom()
+                                    val dPan = event.calculatePan()
+                                    val newScale = (if (dZoom.isFinite()) cur.scale * dZoom else cur.scale)
+                                        .coerceIn(MIN_ZOOM, MAX_ZOOM)
+                                    val maxX = size.width * (newScale - 1f) / 2f
+                                    val maxY = size.height * (newScale - 1f) / 2f
+                                    val nx = if (newScale <= 1f) 0f else cur.offset.x + dPan.x
+                                    val ny = if (newScale <= 1f) 0f else cur.offset.y + dPan.y
+                                    transforms[id] = FrameTransform(
+                                        scale = newScale,
+                                        offset = Offset(
+                                            nx.coerceIn(-maxX, maxX),
+                                            ny.coerceIn(-maxY, maxY),
+                                        ),
+                                    )
+                                    event.changes.forEach { it.consume() }
+                                }
+                            } while (event.changes.any { it.pressed })
+                        }
+                    },
+                beyondViewportPageCount = 1,
             ) { page ->
-                items.getOrNull(page)?.let { item ->
+                latestItems.getOrNull(page)?.let { item ->
                     VideoPage(
                         item = item,
                         active = page == pagerState.currentPage,
                         repository = repository,
                         scaleMode = scaleMode,
-                        zoom = zoom,
+                        transform = transforms[item.id] ?: FrameTransform(),
                     )
                 }
             }
@@ -148,12 +194,14 @@ fun PlayerScreen(
         if (controlsVisible) {
             ControlsPanel(
                 scaleMode = scaleMode,
-                zoom = zoom,
                 onScaleMode = {
                     scaleMode = it
                     prefs.saveScaleMode(it.name)
                 },
-                onZoom = { zoom = it.coerceIn(MIN_ZOOM, MAX_ZOOM) },
+                scalePercent = (currentTransform.scale * 100).toInt(),
+                onResetZoom = {
+                    currentItem?.let { transforms[it.id] = FrameTransform() }
+                },
                 onHide = { controlsVisible = false },
                 onLike = {
                     currentItem?.let { showFlash(if (onToggleLike(it)) "♥" else "♡") }
@@ -204,9 +252,9 @@ fun PlayerScreen(
 @Composable
 private fun ControlsPanel(
     scaleMode: ScaleMode,
-    zoom: Float,
+    scalePercent: Int,
     onScaleMode: (ScaleMode) -> Unit,
-    onZoom: (Float) -> Unit,
+    onResetZoom: () -> Unit,
     onHide: () -> Unit,
     onLike: () -> Unit,
     onFavorite: () -> Unit,
@@ -235,16 +283,16 @@ private fun ControlsPanel(
                 }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = { onZoom(zoom - ZOOM_STEP) }) {
-                    Text("－", color = Color.White)
-                }
                 Text(
-                    text = "${(zoom * 100).toInt()}%",
+                    text = "双指缩放 $scalePercent%",
                     color = Color.White,
                     style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(horizontal = 8.dp),
                 )
-                TextButton(onClick = { onZoom(zoom + ZOOM_STEP) }) {
-                    Text("＋", color = Color.White)
+                if (scalePercent > 100) {
+                    TextButton(onClick = onResetZoom) {
+                        Text("复位", color = Color.White)
+                    }
                 }
                 Spacer(Modifier.width(6.dp))
                 TextButton(onClick = onHide) {
@@ -274,7 +322,7 @@ private fun VideoPage(
     active: Boolean,
     repository: FeedRepository,
     scaleMode: ScaleMode,
-    zoom: Float,
+    transform: FrameTransform,
 ) {
     val context = LocalContext.current
     var playUrl by remember(item.id) { mutableStateOf(item.playUrl) }
@@ -329,11 +377,13 @@ private fun VideoPage(
             update = { view -> view.resizeMode = scaleMode.resizeMode },
             modifier = Modifier
                 .fillMaxSize()
-                // Zoom is a pure presentation scale on top of the resize mode; clip so a zoomed
-                // frame never bleeds into the neighbouring pager page.
+                // Pinch scale + pan are a pure presentation transform; clip so a zoomed frame never
+                // bleeds into the neighbouring pager page.
                 .graphicsLayer {
-                    scaleX = zoom
-                    scaleY = zoom
+                    scaleX = transform.scale
+                    scaleY = transform.scale
+                    translationX = transform.offset.x
+                    translationY = transform.offset.y
                     clip = true
                 },
         )
