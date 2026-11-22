@@ -16,6 +16,7 @@ import com.shortfeed.app.data.Platform
 import com.shortfeed.app.data.VideoSource
 import com.shortfeed.app.data.backend.BackendSource
 import com.shortfeed.app.data.bilibili.BiliSource
+import com.shortfeed.app.data.fixture.FixtureSource
 
 /**
  * Hosts the zero-chrome player. Source switching is hardware-driven (volume keys) so the screen
@@ -65,8 +66,14 @@ class PlayerActivity : ComponentActivity() {
     private fun buildSources(enabled: List<String>, baseUrl: String): List<VideoSource> {
         val list = mutableListOf<VideoSource>()
         if (KEY_BILIBILI in enabled) list += BiliSource()
-        if (KEY_DOUYIN in enabled && baseUrl.isNotEmpty()) {
-            list += BackendSource(KEY_DOUYIN, Platform.DOUYIN, baseUrl, KEY_DOUYIN)
+        if (KEY_DOUYIN in enabled) {
+            // Backend URL set → live feed via the companion service. Empty → play the 6 real
+            // Douyin samples bundled in the APK (no backend needed; proves the player path).
+            if (baseUrl.isNotEmpty()) {
+                list += BackendSource(KEY_DOUYIN, Platform.DOUYIN, baseUrl, KEY_DOUYIN)
+            } else {
+                list += FixtureSource(this)
+            }
         }
         if (KEY_KUAISHOU in enabled && baseUrl.isNotEmpty()) {
             list += BackendSource(KEY_KUAISHOU, Platform.KUAISHOU, baseUrl, KEY_KUAISHOU)

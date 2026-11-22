@@ -75,7 +75,7 @@ private fun PickerScreen(initial: FeedConfig, onEnter: (FeedConfig) -> Unit) {
         Text("选择内容源（至少一个）", style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(8.dp))
         SourceRow("Bilibili", "WBI 签名在本地完成，开箱即用，无需后端", bili) { bili = it }
-        SourceRow("抖音", "需自部署后端（签名维护在服务端）", douyin) { douyin = it }
+        SourceRow("抖音", "不填后端地址=内置 6 条真实样本可播；填了=走自部署后端", douyin) { douyin = it }
         SourceRow("快手", "需自部署后端（签名维护在服务端）", kuaishou) { kuaishou = it }
         Spacer(Modifier.height(16.dp))
         OutlinedTextField(
