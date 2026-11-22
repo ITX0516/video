@@ -27,6 +27,12 @@
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:theme="@style/Theme.ShortFeed.Immersive" />
 
+        <!-- Douyin website in a WebView: real login / like / favourite (no signing needed). -->
+        <activity
+            android:name=".web.DouyinWebActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:theme="@style/Theme.ShortFeed.Immersive" />
+
     </application>
 
 </manifest>

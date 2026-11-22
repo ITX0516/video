@@ -19,6 +19,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
@@ -31,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.shortfeed.app.player.PlayerActivity
+import com.shortfeed.app.web.DouyinWebActivity
 
 class MainActivity : ComponentActivity() {
 
@@ -55,6 +57,9 @@ class MainActivity : ComponentActivity() {
                                 putExtra(PlayerActivity.EXTRA_BACKEND_URL, cfg.backendUrl)
                             })
                         },
+                        onOpenDouyinWeb = {
+                            startActivity(Intent(this, DouyinWebActivity::class.java))
+                        },
                     )
                 }
             }
@@ -65,7 +70,11 @@ class MainActivity : ComponentActivity() {
 data class FeedConfig(val enabled: List<String>, val backendUrl: String)
 
 @Composable
-private fun PickerScreen(initial: FeedConfig, onEnter: (FeedConfig) -> Unit) {
+private fun PickerScreen(
+    initial: FeedConfig,
+    onEnter: (FeedConfig) -> Unit,
+    onOpenDouyinWeb: () -> Unit,
+) {
     var bili by remember { mutableStateOf(PlayerActivity.KEY_BILIBILI in initial.enabled) }
     var douyin by remember { mutableStateOf(PlayerActivity.KEY_DOUYIN in initial.enabled) }
     var kuaishou by remember { mutableStateOf(PlayerActivity.KEY_KUAISHOU in initial.enabled) }
@@ -106,9 +115,15 @@ private fun PickerScreen(initial: FeedConfig, onEnter: (FeedConfig) -> Unit) {
             },
             modifier = Modifier.fillMaxWidth(),
         ) { Text("进入沉浸模式") }
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(
+            onClick = onOpenDouyinWeb,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("抖音网页版（登录 / 点赞 / 收藏）") }
         Spacer(Modifier.height(8.dp))
         Text(
-            "提示：播放中用音量键切换内容源；屏幕上没有任何控件。",
+            "提示：播放中用音量键切换内容源；屏幕上没有任何控件。\n" +
+                "抖音网页版是抖音官方 H5，登录/点赞/收藏原样可用；若弹出「下载 App」忽略即可。",
             style = MaterialTheme.typography.bodySmall,
         )
     }
