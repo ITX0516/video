@@ -3,10 +3,6 @@ package com.shortfeed.app.player
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.widget.FrameLayout
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.calculateZoom
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,19 +25,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.PointerEventType
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.activity.compose.BackHandler
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -81,7 +74,7 @@ fun PlayerScreen(
     repository: FeedRepository,
     onToggleLike: (VideoItem) -> Boolean = { false },
     onToggleFavorite: (VideoItem) -> Boolean = { false },
-    onSwitchDouyinTab: () -> String? = { null },
+    onSwitchDouyinTab: (Boolean) -> String? = { null },
 ) {
     val context = LocalContext.current
     val prefs = remember { Prefs(context.applicationContext) }
@@ -92,9 +85,13 @@ fun PlayerScreen(
     var scaleMode by remember { mutableStateOf(ScaleMode.fromKey(prefs.loadScaleMode())) }
     var zoom by remember { mutableFloatStateOf(1f) }
     var controlsVisible by remember { mutableStateOf(true) }
+    var douyinFollowing by remember { mutableStateOf(false) }
+    val isDouyin = activeKey == "douyin"
+    val currentItem = items.getOrNull(pagerState.currentPage)
 
-    // Current item, kept fresh for the gesture closures without restarting pointerInput.
-    val latestItem by rememberUpdatedState(items.getOrNull(pagerState.currentPage))
+    // Hiding the UI is sticky across videos. Back brings the controls back; when they are already
+    // visible the system default (exit the player) applies.
+    BackHandler(enabled = !controlsVisible) { controlsVisible = true }
 
     // Transient feedback (♥ / ★ / tab name) — the only "UI" allowed in immersive mode.
     var flash by remember { mutableStateOf<String?>(null) }
@@ -148,63 +145,6 @@ fun PlayerScreen(
             }
         }
 
-        // Gesture layer. Pinch only reacts to 2+ pointers so the vertical swipe is untouched;
-        // tapping brings the controls back after they were hidden.
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .pointerInput(Unit) {
-                    awaitEachGesture {
-                        awaitFirstDown(requireUnconsumed = false)
-                        do {
-                            val event = awaitPointerEvent()
-                            if (event.changes.count { it.pressed } >= 2) {
-                                val change = event.calculateZoom()
-                                if (change.isFinite() && change != 1f) {
-                                    zoom = (zoom * change).coerceIn(MIN_ZOOM, MAX_ZOOM)
-                                }
-                            }
-                        } while (event.changes.any { it.pressed })
-                    }
-                }
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onTap = { controlsVisible = true },
-                        onDoubleTap = {
-                            latestItem?.let { item ->
-                                showFlash(if (onToggleLike(item)) "♥" else "♡")
-                            }
-                        },
-                        onLongPress = {
-                            latestItem?.let { item ->
-                                showFlash(if (onToggleFavorite(item)) "★ 收藏" else "☆ 取消")
-                            }
-                        },
-                    )
-                }
-                .pointerInput(Unit) {
-                    // Two-finger double tap → 推荐 ⇄ 关注. Observed at the Initial pass without
-                    // consuming, so pinch-zoom keeps working.
-                    var lastTwoFingerDown = 0L
-                    awaitPointerEventScope {
-                        while (true) {
-                            val event = awaitPointerEvent(PointerEventPass.Initial)
-                            if (event.type == PointerEventType.Press &&
-                                event.changes.count { it.pressed } == 2
-                            ) {
-                                val now = System.currentTimeMillis()
-                                if (now - lastTwoFingerDown in 1..450) {
-                                    lastTwoFingerDown = 0L
-                                    onSwitchDouyinTab()?.let { showFlash("切换到「$it」") }
-                                } else {
-                                    lastTwoFingerDown = now
-                                }
-                            }
-                        }
-                    }
-                }
-        )
-
         if (controlsVisible) {
             ControlsPanel(
                 scaleMode = scaleMode,
@@ -215,6 +155,23 @@ fun PlayerScreen(
                 },
                 onZoom = { zoom = it.coerceIn(MIN_ZOOM, MAX_ZOOM) },
                 onHide = { controlsVisible = false },
+                onLike = {
+                    currentItem?.let { showFlash(if (onToggleLike(it)) "♥" else "♡") }
+                },
+                onFavorite = {
+                    currentItem?.let { showFlash(if (onToggleFavorite(it)) "★ 收藏" else "☆ 取消") }
+                },
+                tabSwitch = if (isDouyin) {
+                    {
+                        onSwitchDouyinTab(!douyinFollowing)?.let { label ->
+                            douyinFollowing = !douyinFollowing
+                            showFlash("切换到「$label」")
+                        }
+                    }
+                } else {
+                    null
+                },
+                tabTarget = if (douyinFollowing) "推荐" else "关注",
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(16.dp),
@@ -251,6 +208,10 @@ private fun ControlsPanel(
     onScaleMode: (ScaleMode) -> Unit,
     onZoom: (Float) -> Unit,
     onHide: () -> Unit,
+    onLike: () -> Unit,
+    onFavorite: () -> Unit,
+    tabSwitch: (() -> Unit)?,
+    tabTarget: String,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -288,6 +249,19 @@ private fun ControlsPanel(
                 Spacer(Modifier.width(6.dp))
                 TextButton(onClick = onHide) {
                     Text("隐藏全部 UI", color = Color.White)
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onLike) {
+                    Text("♥ 赞", color = Color.White)
+                }
+                TextButton(onClick = onFavorite) {
+                    Text("★ 收藏", color = Color.White)
+                }
+                if (tabSwitch != null) {
+                    TextButton(onClick = tabSwitch) {
+                        Text("切到$tabTarget", color = Color.White)
+                    }
                 }
             }
         }

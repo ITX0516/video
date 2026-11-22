@@ -31,7 +31,6 @@ class PlayerActivity : ComponentActivity() {
 
     private lateinit var repository: FeedRepository
     private var douyinBridge: DouyinWebBridge? = null
-    private var followingTab = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -63,13 +62,12 @@ class PlayerActivity : ComponentActivity() {
                     onToggleFavorite = { item ->
                         prefs.toggleFavorite(item.platform.name + ":" + item.id)
                     },
-                    onSwitchDouyinTab = {
+                    onSwitchDouyinTab = { toFollowing ->
                         val bridge = douyinBridge
                         if (bridge != null && repository.activeSource?.platform == Platform.DOUYIN) {
-                            followingTab = !followingTab
-                            bridge.switchTab(followingTab)
+                            bridge.switchTab(toFollowing)
                             lifecycleScope.launch { repository.refresh() }
-                            if (followingTab) "关注" else "推荐"
+                            if (toFollowing) "关注" else "推荐"
                         } else {
                             null
                         }
