@@ -25,7 +25,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -68,7 +67,7 @@ enum class ScaleMode(val label: String, val resizeMode: Int) {
 private const val MIN_ZOOM = 1f
 private const val MAX_ZOOM = 3f
 
-/** Per-video pinch state: scale plus pan offset in pixels. Kept for the session, per video id. */
+/** Pinch state: scale plus pan offset in pixels. Shared by every video (carries over on swipe). */
 private data class FrameTransform(
     val scale: Float = 1f,
     val offset: Offset = Offset.Zero,
@@ -96,11 +95,10 @@ fun PlayerScreen(
     var scaleMode by remember { mutableStateOf(ScaleMode.fromKey(prefs.loadScaleMode())) }
     var controlsVisible by remember { mutableStateOf(true) }
     var douyinFollowing by remember { mutableStateOf(false) }
-    // Zoom/pan is remembered per video, so a swiped-away video comes back exactly as you left it.
-    val transforms = remember { mutableStateMapOf<String, FrameTransform>() }
+    // One transform for all videos: the zoom/pan you set carries over when you swipe to the next one.
+    var transform by remember { mutableStateOf(FrameTransform()) }
     val isDouyin = activeKey == "douyin"
     val currentItem = items.getOrNull(pagerState.currentPage)
-    val currentTransform = currentItem?.let { transforms[it.id] } ?: FrameTransform()
     val latestItems by rememberUpdatedState(items)
 
     // Hiding the UI is sticky across videos. Back brings the controls back; when they are already
@@ -154,9 +152,7 @@ fun PlayerScreen(
                             do {
                                 val event = awaitPointerEvent()
                                 if (event.changes.count { it.pressed } >= 2) {
-                                    val id = latestItems.getOrNull(pagerState.currentPage)?.id
-                                        ?: return@awaitEachGesture
-                                    val cur = transforms[id] ?: FrameTransform()
+                                    val cur = transform
                                     val dZoom = event.calculateZoom()
                                     val dPan = event.calculatePan()
                                     val newScale = (if (dZoom.isFinite()) cur.scale * dZoom else cur.scale)
@@ -165,7 +161,7 @@ fun PlayerScreen(
                                     val maxY = size.height * (newScale - 1f) / 2f
                                     val nx = if (newScale <= 1f) 0f else cur.offset.x + dPan.x
                                     val ny = if (newScale <= 1f) 0f else cur.offset.y + dPan.y
-                                    transforms[id] = FrameTransform(
+                                    transform = FrameTransform(
                                         scale = newScale,
                                         offset = Offset(
                                             nx.coerceIn(-maxX, maxX),
@@ -185,7 +181,7 @@ fun PlayerScreen(
                         active = page == pagerState.currentPage,
                         repository = repository,
                         scaleMode = scaleMode,
-                        transform = transforms[item.id] ?: FrameTransform(),
+                        transform = transform,
                     )
                 }
             }
@@ -198,10 +194,8 @@ fun PlayerScreen(
                     scaleMode = it
                     prefs.saveScaleMode(it.name)
                 },
-                scalePercent = (currentTransform.scale * 100).toInt(),
-                onResetZoom = {
-                    currentItem?.let { transforms[it.id] = FrameTransform() }
-                },
+                scalePercent = (transform.scale * 100).toInt(),
+                onResetZoom = { transform = FrameTransform() },
                 onHide = { controlsVisible = false },
                 onLike = {
                     currentItem?.let { showFlash(if (onToggleLike(it)) "♥" else "♡") }
