@@ -48,12 +48,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import com.shortfeed.app.Diagnostics
 import com.shortfeed.app.Prefs
 import com.shortfeed.app.data.FeedRepository
 import com.shortfeed.app.data.Platform
@@ -462,6 +462,7 @@ private fun VideoPage(
             override fun onPlayerError(error: PlaybackException) {
                 errorText = error.errorCodeName
                 loadState = LoadState.Error
+                Diagnostics.record(item.platform.name, item.id, error.errorCodeName)
             }
         }
         player.addListener(listener)
@@ -510,6 +511,7 @@ private fun VideoPage(
             } else if (item.playUrl.isEmpty()) {
                 errorText = "无法获取播放地址"
                 loadState = LoadState.Error
+                Diagnostics.record(item.platform.name, item.id, "无法获取播放地址")
             }
         }
     }
@@ -655,9 +657,6 @@ class PlayerPool(private val context: android.content.Context, private val maxSi
 }
 
 private fun buildPlayer(context: android.content.Context, platform: Platform): ExoPlayer {
-    val dataSourceFactory = DefaultHttpDataSource.Factory()
-        .setUserAgent(DESKTOP_UA) // mobile & ExoPlayer default UAs get 403 from these CDNs
-        .setDefaultRequestProperties(refererFor(platform))
     // Buffer targets tuned for quick starts while swiping, not for long-form playback.
     val loadControl = DefaultLoadControl.Builder()
         .setBufferDurationsMs(
@@ -668,7 +667,9 @@ private fun buildPlayer(context: android.content.Context, platform: Platform): E
         )
         .build()
     return ExoPlayer.Builder(context)
-        .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+        .setMediaSourceFactory(
+            DefaultMediaSourceFactory(VideoCache.dataSourceFactory(context, platform)),
+        )
         .setLoadControl(loadControl)
         .build()
 }
@@ -693,14 +694,4 @@ private fun pickVideoUrl(item: VideoItem, dyQuality: String): String {
     val target = qualityNumber(dyQuality)
     val lowerOrEqual = sorted.filter { qualityNumber(it.label) <= target }.lastOrNull()
     return (lowerOrEqual ?: sorted.first()).url
-}
-
-private const val DESKTOP_UA =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-
-private fun refererFor(platform: Platform): Map<String, String> = when (platform) {
-    Platform.BILIBILI -> mapOf("Referer" to "https://www.bilibili.com")
-    Platform.DOUYIN -> mapOf("Referer" to "https://www.douyin.com")
-    Platform.KUAISHOU -> mapOf("Referer" to "https://www.kuaishou.com")
 }

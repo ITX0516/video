@@ -12,8 +12,8 @@ android {
         applicationId = "com.shortfeed.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 16
-        versionName = "1.15"
+        versionCode = 17
+        versionName = "1.16"
     }
 
     buildTypes {
@@ -58,6 +58,8 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.ui)
+    implementation(libs.androidx.media3.datasource)
+    implementation(libs.androidx.media3.database)
     implementation(libs.okhttp)
 
     debugImplementation(libs.androidx.ui.tooling)

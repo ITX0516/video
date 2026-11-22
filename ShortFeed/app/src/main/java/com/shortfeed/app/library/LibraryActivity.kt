@@ -51,6 +51,7 @@ class LibraryActivity : ComponentActivity() {
                         onPlay = { item ->
                             startActivity(
                                 Intent(this, LibraryPlayerActivity::class.java).apply {
+                                    putExtra(LibraryPlayerActivity.EXTRA_ID, item.id)
                                     putExtra(LibraryPlayerActivity.EXTRA_URL, item.playUrl)
                                     putExtra(LibraryPlayerActivity.EXTRA_PLATFORM, item.platform.name)
                                     putExtra(LibraryPlayerActivity.EXTRA_TITLE, item.title)
@@ -121,7 +122,8 @@ private fun LibraryScreen(
             }
         }
         Text(
-            text = "提示：记录只存本机。视频直链会过期，较早的条目可能无法播放。",
+            text = "提示：记录只存本机，按视频 id 保存。打开时会重新解析地址；" +
+                "抖音若重新解析失败则退回保存时的地址，可能已过期。",
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(16.dp),
         )

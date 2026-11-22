@@ -50,6 +50,11 @@
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:theme="@style/Theme.ShortFeed.Immersive" />
 
+        <!-- Recent playback failures, copyable as text for bug reports. -->
+        <activity
+            android:name=".DiagnosticsActivity"
+            android:theme="@style/Theme.ShortFeed" />
+
     </application>
 
 </manifest>

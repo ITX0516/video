@@ -135,6 +135,20 @@ class BiliSource(private val sessdata: String = "", quality: Int = 64) : VideoSo
         return PageResult(items, nextIdx)
     }
 
+    /**
+     * Freshly resolves a saved video that is no longer in the feed: bvid -> cid via the public
+     * view API, then the play URL. Used by the local likes/favourites library, where storing the
+     * signed CDN URL would be pointless (it expires within hours).
+     */
+    fun resolveById(bvid: String): String? {
+        val view = runCatching {
+            get("https://api.bilibili.com/x/web-interface/view", params = mapOf("bvid" to bvid))
+        }.getOrNull() ?: return null
+        val cid = view.optJSONObject("data")?.optLong("cid") ?: 0L
+        if (cid == 0L) return null
+        return resolvePlayUrl(bvid, cid)
+    }
+
     private fun resolvePlayUrl(bvid: String, cid: Long): String? {
         val params = mapOf(
             "bvid" to bvid,

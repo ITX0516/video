@@ -68,6 +68,9 @@ class MainActivity : ComponentActivity() {
                         onOpenLibrary = {
                             startActivity(Intent(this, LibraryActivity::class.java))
                         },
+                        onOpenDiagnostics = {
+                            startActivity(Intent(this, DiagnosticsActivity::class.java))
+                        },
                     )
                 }
             }
@@ -84,6 +87,7 @@ private fun PickerScreen(
     onOpenDouyinWeb: () -> Unit,
     onBiliLogin: () -> Unit,
     onOpenLibrary: () -> Unit,
+    onOpenDiagnostics: () -> Unit,
 ) {
     var bili by remember { mutableStateOf(PlayerActivity.KEY_BILIBILI in initial.enabled) }
     var douyin by remember { mutableStateOf(PlayerActivity.KEY_DOUYIN in initial.enabled) }
@@ -140,6 +144,11 @@ private fun PickerScreen(
             onClick = onOpenLibrary,
             modifier = Modifier.fillMaxWidth(),
         ) { Text("我的赞 / 收藏") }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            onClick = onOpenDiagnostics,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("诊断（加载失败记录）") }
         Spacer(Modifier.height(8.dp))
         Text(
             "提示：播放中用音量键切换内容源；屏幕上没有任何控件。\n" +
