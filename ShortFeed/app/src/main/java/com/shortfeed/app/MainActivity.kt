@@ -92,7 +92,7 @@ private fun PickerScreen(
         Text("选择内容源（至少一个）", style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(8.dp))
         SourceRow("Bilibili", "WBI 签名在本地完成，开箱即用，无需后端", bili) { bili = it }
-        SourceRow("抖音", "不填后端地址=内置 6 条真实样本可播；填了=走自部署后端", douyin) { douyin = it }
+        SourceRow("抖音", "不填后端=用你登录的抖音网页会话取推荐流；填了=走自部署后端", douyin) { douyin = it }
         SourceRow("快手", "需自部署后端（签名维护在服务端）", kuaishou) { kuaishou = it }
         Spacer(Modifier.height(16.dp))
         OutlinedTextField(
@@ -123,7 +123,8 @@ private fun PickerScreen(
         Spacer(Modifier.height(8.dp))
         Text(
             "提示：播放中用音量键切换内容源；屏幕上没有任何控件。\n" +
-                "抖音网页版是抖音官方 H5，登录/点赞/收藏原样可用；若弹出「下载 App」忽略即可。",
+                "抖音沉浸流用你登录的网页会话：先去「抖音网页版」登录，再进沉浸模式。\n" +
+                "网页版登录/点赞/收藏原样可用；若弹出「下载 App」忽略即可。",
             style = MaterialTheme.typography.bodySmall,
         )
     }

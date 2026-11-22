@@ -16,6 +16,8 @@ import com.shortfeed.app.data.Platform
 import com.shortfeed.app.data.VideoSource
 import com.shortfeed.app.data.backend.BackendSource
 import com.shortfeed.app.data.bilibili.BiliSource
+import com.shortfeed.app.data.douyin.DouyinWebBridge
+import com.shortfeed.app.data.douyin.DouyinWebSource
 import com.shortfeed.app.data.fixture.FixtureSource
 
 /**
@@ -25,6 +27,7 @@ import com.shortfeed.app.data.fixture.FixtureSource
 class PlayerActivity : ComponentActivity() {
 
     private lateinit var repository: FeedRepository
+    private var douyinBridge: DouyinWebBridge? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -44,6 +47,25 @@ class PlayerActivity : ComponentActivity() {
                 PlayerScreen(repository)
             }
         }
+
+        // The Douyin bridge WebView sits behind the (opaque) Compose surface.
+        douyinBridge?.attachBehind()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        douyinBridge?.onResume()
+    }
+
+    override fun onPause() {
+        douyinBridge?.onPause()
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        douyinBridge?.destroy()
+        douyinBridge = null
+        super.onDestroy()
     }
 
     /** Volume up/down cycle the active source instead of changing volume. Truly UI-less switching. */
@@ -67,12 +89,14 @@ class PlayerActivity : ComponentActivity() {
         val list = mutableListOf<VideoSource>()
         if (KEY_BILIBILI in enabled) list += BiliSource()
         if (KEY_DOUYIN in enabled) {
-            // Backend URL set → live feed via the companion service. Empty → play the 6 real
-            // Douyin samples bundled in the APK (no backend needed; proves the player path).
             if (baseUrl.isNotEmpty()) {
+                // Explicit companion backend → live feed from the self-hosted service.
                 list += BackendSource(KEY_DOUYIN, Platform.DOUYIN, baseUrl, KEY_DOUYIN)
             } else {
-                list += FixtureSource(this)
+                // No backend → use the account's real feed via the logged-in web session. If the
+                // page can't be read, fall back to the 6 bundled samples so the screen isn't blank.
+                val bridge = douyinBridge ?: DouyinWebBridge(this).also { douyinBridge = it }
+                list += DouyinWebSource(bridge, FixtureSource(this))
             }
         }
         if (KEY_KUAISHOU in enabled && baseUrl.isNotEmpty()) {
