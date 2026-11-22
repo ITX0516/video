@@ -117,11 +117,19 @@ fun PlayerScreen(
     val playUrls = remember { mutableStateMapOf<String, String>() }
     var quality by remember { mutableStateOf(initialQuality) }
     var qualityVersion by remember { mutableStateOf(0) }
+    // Douyin rendition label ("1080P"…); empty = the feed's own default address.
+    var dyQuality by remember { mutableStateOf(prefs.loadDouyinQuality()) }
     fun applyQuality(qn: Int) {
         if (qn == quality) return
         quality = qn
         qualityVersion++
         onQualityChange(qn)
+    }
+    fun applyDouyinQuality(label: String) {
+        if (label == dyQuality) return
+        dyQuality = label
+        prefs.saveDouyinQuality(label)
+        qualityVersion++
     }
 
     // Hiding the UI is sticky across videos. Back brings the controls back; when they are already
@@ -206,6 +214,7 @@ fun PlayerScreen(
                         scaleMode = scaleMode,
                         transform = transform,
                         qualityVersion = qualityVersion,
+                        dyQuality = dyQuality,
                         onResolved = { playUrls[item.id] = it },
                     )
                 }
@@ -237,6 +246,9 @@ fun PlayerScreen(
                 showQuality = isBilibili,
                 quality = quality,
                 onQuality = { applyQuality(it) },
+                douyinOptions = currentItem?.variants?.map { it.label }.orEmpty(),
+                douyinQuality = dyQuality,
+                onDouyinQuality = { applyDouyinQuality(it) },
                 tabSwitch = if (isDouyin) {
                     {
                         onSwitchDouyinTab(!douyinFollowing)?.let { label ->
@@ -289,6 +301,9 @@ private fun ControlsPanel(
     showQuality: Boolean,
     quality: Int,
     onQuality: (Int) -> Unit,
+    douyinOptions: List<String>,
+    douyinQuality: String,
+    onDouyinQuality: (String) -> Unit,
     tabSwitch: (() -> Unit)?,
     tabTarget: String,
     modifier: Modifier = Modifier,
@@ -361,6 +376,24 @@ private fun ControlsPanel(
                     }
                 }
             }
+            if (douyinOptions.isNotEmpty()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "清晰度",
+                        color = Color.White,
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 8.dp),
+                    )
+                    listOf("自动" to "").plus(douyinOptions.map { it to it }).forEach { (label, value) ->
+                        TextButton(onClick = { onDouyinQuality(value) }) {
+                            Text(
+                                text = label,
+                                color = if (value == douyinQuality) Color(0xFFD0BCFF) else Color.White,
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -373,10 +406,16 @@ private fun VideoPage(
     scaleMode: ScaleMode,
     transform: FrameTransform,
     qualityVersion: Int,
+    dyQuality: String,
     onResolved: (String) -> Unit,
 ) {
     val context = LocalContext.current
-    var playUrl by remember(item.id, qualityVersion) { mutableStateOf(item.playUrl) }
+    // Douyin ships several renditions; honour the chosen one, else the feed's default address.
+    val preferredUrl = remember(item.id, dyQuality) {
+        item.variants.firstOrNull { it.label == dyQuality }?.url?.takeIf { it.isNotEmpty() }
+            ?: item.playUrl
+    }
+    var playUrl by remember(item.id, qualityVersion) { mutableStateOf(preferredUrl) }
 
     // One player per page, with the request headers each platform's CDN demands.
     val player = remember(item.id) {

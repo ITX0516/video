@@ -8,6 +8,7 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.shortfeed.app.data.Platform
+import com.shortfeed.app.data.QualityVariant
 import com.shortfeed.app.data.VideoItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -110,10 +111,43 @@ class DouyinWebBridge(private val activity: Activity) {
                     cover = cover,
                     playUrl = play,
                     sourceKey = KEY,
+                    variants = parseVariants(video),
                 )
             )
         }
     }
+
+    /**
+     * The web payload ships several renditions under video.bit_rate. We keep the ones that expose a
+     * direct URL, label them by their short side (540P / 720P / 1080P …) and sort highest first.
+     * Anything unexpected is skipped rather than guessed, so the default play_addr always remains.
+     */
+    private fun parseVariants(video: JSONObject): List<QualityVariant> {
+        val arr = video.optJSONArray("bit_rate") ?: return emptyList()
+        val byLabel = LinkedHashMap<String, String>()
+        for (i in 0 until arr.length()) {
+            val entry = arr.optJSONObject(i) ?: continue
+            val addr = entry.optJSONObject("play_addr") ?: continue
+            val url = fullUrl(addr.optJSONArray("url_list")?.optString(0).orEmpty())
+            if (url.isEmpty()) continue
+            val w = addr.optInt("width", 0).takeIf { it in 1..4096 }
+                ?: entry.optInt("width", 0).takeIf { it in 1..4096 } ?: 0
+            val h = addr.optInt("height", 0).takeIf { it in 1..4096 }
+                ?: entry.optInt("height", 0).takeIf { it in 1..4096 } ?: 0
+            val label = if (w > 0 && h > 0) {
+                "${standardHeight(minOf(w, h))}P"
+            } else {
+                entry.optString("gear_name").takeIf { it.isNotEmpty() } ?: continue
+            }
+            byLabel.putIfAbsent(label, url)
+        }
+        return byLabel
+            .map { QualityVariant(it.key, it.value) }
+            .sortedByDescending { it.label.removeSuffix("P").toIntOrNull() ?: 0 }
+    }
+
+    private fun standardHeight(px: Int): Int =
+        STANDARD_HEIGHTS.minByOrNull { kotlin.math.abs(it - px) } ?: px
 
     /** Clears buffered items. Call when the page switches feed (推荐 ⇄ 关注). */
     fun resetBuffer() {
@@ -202,6 +236,7 @@ class DouyinWebBridge(private val activity: Activity) {
     companion object {
         const val KEY = "douyin"
         private const val START_URL = "https://www.douyin.com/"
+        private val STANDARD_HEIGHTS = intArrayOf(240, 360, 480, 540, 720, 1080, 1440, 2160)
         private const val DESKTOP_UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
                 "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"

@@ -45,6 +45,13 @@ class Prefs(context: Context) {
         sp.edit().putInt(KEY_BILI_QN, qn).apply()
     }
 
+    /** Preferred Douyin rendition label ("1080P"…). Empty = the feed's default address. */
+    fun loadDouyinQuality(): String = sp.getString(KEY_DY_Q, "").orEmpty()
+
+    fun saveDouyinQuality(label: String) {
+        sp.edit().putString(KEY_DY_Q, label).apply()
+    }
+
     // ---- local likes / favourites ----
 
     fun isLiked(item: VideoItem): Boolean = contains(KEY_LIKES, keyOf(item))
@@ -124,6 +131,7 @@ class Prefs(context: Context) {
         private const val KEY_SCALE = "scale_mode"
         private const val KEY_BILI_SESS = "bili_sessdata"
         private const val KEY_BILI_QN = "bili_qn"
+        private const val KEY_DY_Q = "douyin_quality"
         private const val KEY_LIKES = "liked_ids"
         private const val KEY_FAVS = "fav_ids"
         private const val KEY_LIKE_META = "liked_meta"
