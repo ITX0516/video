@@ -57,9 +57,14 @@ class DouyinWebActivity : ComponentActivity() {
                 domStorageEnabled = true
                 databaseEnabled = true
                 mediaPlaybackRequiresUserGesture = false // autoplay, like the native player
-                userAgentString = MOBILE_UA
+                userAgentString = DESKTOP_UA
                 useWideViewPort = true
                 loadWithOverviewMode = true
+                // Desktop pages are wide; pinch-zoom is essential. Hide the ugly +/- widget but
+                // keep the gesture. This also scales inline video.
+                setSupportZoom(true)
+                builtInZoomControls = true
+                displayZoomControls = false
                 javaScriptCanOpenWindowsAutomatically = true
                 setSupportMultipleWindows(false)
                 mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
@@ -161,11 +166,11 @@ class DouyinWebActivity : ComponentActivity() {
     private companion object {
         const val START_URL = "https://www.douyin.com/"
 
-        // A plain mobile Chrome UA. Do NOT use the default WebView UA (contains "wv") — Douyin
-        // degrades or blocks it.
-        const val MOBILE_UA =
-            "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 " +
-                "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+        // Desktop Chrome UA. The mobile UA gets the "open in app" login wall that cannot complete
+        // in a WebView; the desktop site logs in normally (QR / phone + code).
+        const val DESKTOP_UA =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
         // Hide only obvious "download / open app" nudges; conservative so the real UI keeps working.
         const val HIDE_APP_NUDGE_JS = """

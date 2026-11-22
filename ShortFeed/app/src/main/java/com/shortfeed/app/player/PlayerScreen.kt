@@ -3,12 +3,18 @@ package com.shortfeed.app.player
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.widget.FrameLayout
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -20,12 +26,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -53,10 +61,15 @@ enum class ScaleMode(val label: String, val resizeMode: Int) {
     }
 }
 
+private const val MIN_ZOOM = 1f
+private const val MAX_ZOOM = 3f
+private const val ZOOM_STEP = 0.25f
+
 /**
  * The entire in-app surface: a full-screen vertical pager of videos.
- * No persistent chrome. A small translucent panel (top-right) picks the picture mode and can be
- * dismissed with 「隐藏全部 UI」; after that the screen is 100% video and a tap brings it back.
+ * A small translucent panel (top-right) picks the picture mode / zoom and can be dismissed with
+ * 「隐藏全部 UI」; after that the screen is 100% video and a tap brings it back. Two-finger pinch
+ * also zooms, without stealing the single-finger vertical swipe.
  */
 @Composable
 fun PlayerScreen(repository: FeedRepository) {
@@ -67,6 +80,7 @@ fun PlayerScreen(repository: FeedRepository) {
     val pagerState = rememberPagerState(pageCount = { items.size })
 
     var scaleMode by remember { mutableStateOf(ScaleMode.fromKey(prefs.loadScaleMode())) }
+    var zoom by remember { mutableFloatStateOf(1f) }
     var controlsVisible by remember { mutableStateOf(true) }
 
     // (Re)load the active source whenever it changes (volume-key switching) — includes first load.
@@ -101,29 +115,49 @@ fun PlayerScreen(repository: FeedRepository) {
                         active = page == pagerState.currentPage,
                         repository = repository,
                         scaleMode = scaleMode,
+                        zoom = zoom,
                     )
                 }
             }
         }
 
+        // Gesture layer. Pinch only reacts to 2+ pointers so the vertical swipe is untouched;
+        // tapping brings the controls back after they were hidden.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false)
+                        do {
+                            val event = awaitPointerEvent()
+                            if (event.changes.count { it.pressed } >= 2) {
+                                val change = event.calculateZoom()
+                                if (change.isFinite() && change != 1f) {
+                                    zoom = (zoom * change).coerceIn(MIN_ZOOM, MAX_ZOOM)
+                                }
+                            }
+                        } while (event.changes.any { it.pressed })
+                    }
+                }
+                .pointerInput(Unit) {
+                    detectTapGestures { controlsVisible = true }
+                }
+        )
+
         if (controlsVisible) {
             ControlsPanel(
                 scaleMode = scaleMode,
+                zoom = zoom,
                 onScaleMode = {
                     scaleMode = it
                     prefs.saveScaleMode(it.name)
                 },
+                onZoom = { zoom = it.coerceIn(MIN_ZOOM, MAX_ZOOM) },
                 onHide = { controlsVisible = false },
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(16.dp),
-            )
-        } else {
-            // Tap anywhere to bring the controls back; until then the screen is pure video.
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .pointerInput(Unit) { detectTapGestures { controlsVisible = true } }
             )
         }
     }
@@ -132,7 +166,9 @@ fun PlayerScreen(repository: FeedRepository) {
 @Composable
 private fun ControlsPanel(
     scaleMode: ScaleMode,
+    zoom: Float,
     onScaleMode: (ScaleMode) -> Unit,
+    onZoom: (Float) -> Unit,
     onHide: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -142,21 +178,36 @@ private fun ControlsPanel(
         color = Color.Black.copy(alpha = 0.55f),
         contentColor = Color.White,
     ) {
-        Row(
+        Column(
             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            horizontalAlignment = Alignment.End,
         ) {
-            ScaleMode.entries.forEach { mode ->
-                TextButton(onClick = { onScaleMode(mode) }) {
-                    Text(
-                        text = mode.label,
-                        color = if (mode == scaleMode) Color(0xFFD0BCFF) else Color.White,
-                    )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ScaleMode.entries.forEach { mode ->
+                    TextButton(onClick = { onScaleMode(mode) }) {
+                        Text(
+                            text = mode.label,
+                            color = if (mode == scaleMode) Color(0xFFD0BCFF) else Color.White,
+                        )
+                    }
                 }
             }
-            TextButton(onClick = onHide) {
-                Text("隐藏全部 UI", color = Color.White)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { onZoom(zoom - ZOOM_STEP) }) {
+                    Text("－", color = Color.White)
+                }
+                Text(
+                    text = "${(zoom * 100).toInt()}%",
+                    color = Color.White,
+                    style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                )
+                TextButton(onClick = { onZoom(zoom + ZOOM_STEP) }) {
+                    Text("＋", color = Color.White)
+                }
+                Spacer(Modifier.width(6.dp))
+                TextButton(onClick = onHide) {
+                    Text("隐藏全部 UI", color = Color.White)
+                }
             }
         }
     }
@@ -168,6 +219,7 @@ private fun VideoPage(
     active: Boolean,
     repository: FeedRepository,
     scaleMode: ScaleMode,
+    zoom: Float,
 ) {
     val context = LocalContext.current
     var playUrl by remember(item.id) { mutableStateOf(item.playUrl) }
@@ -220,7 +272,15 @@ private fun VideoPage(
                 }
             },
             update = { view -> view.resizeMode = scaleMode.resizeMode },
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                // Zoom is a pure presentation scale on top of the resize mode; clip so a zoomed
+                // frame never bleeds into the neighbouring pager page.
+                .graphicsLayer {
+                    scaleX = zoom
+                    scaleY = zoom
+                    clip = true
+                },
         )
     }
 }
