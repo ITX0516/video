@@ -54,7 +54,7 @@ class PlayerActivity : ComponentActivity() {
                     initialQuality = prefs.loadBiliQuality(),
                     onQualityChange = { qn ->
                         prefs.saveBiliQuality(qn)
-                        biliSource?.setQuality(qn)
+                        biliSource?.changeQuality(qn)
                         repository.clearResolvedUrls()
                     },
                     onToggleLike = { item, url ->

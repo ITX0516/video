@@ -22,8 +22,9 @@ class BiliSource(private val sessdata: String = "", quality: Int = 64) : VideoSo
     /** Bilibili qn code. Changed at runtime from the player's quality row. */
     @Volatile
     var quality: Int = quality
+        private set
 
-    fun setQuality(qn: Int) {
+    fun changeQuality(qn: Int) {
         quality = qn
     }
 
