@@ -105,6 +105,8 @@ fun PlayerScreen(
     onSwitchDouyinTab: (Boolean) -> String? = { null },
 ) {
     val context = LocalContext.current
+    val pool = remember { PlayerPool(context.applicationContext) }
+    DisposableEffect(Unit) { onDispose { pool.releaseAll() } }
     val prefs = remember { Prefs(context.applicationContext) }
     val items by repository.items.collectAsStateWithLifecycle()
     val activeKey by repository.activeKey.collectAsStateWithLifecycle()
@@ -159,7 +161,10 @@ fun PlayerScreen(
     }
 
     // (Re)load the active source whenever it changes (volume-key switching) — includes first load.
-    LaunchedEffect(activeKey) { repository.loadMore() }
+    LaunchedEffect(activeKey) {
+        pool.releaseAll() // a new source starts with a clean pool
+        repository.loadMore()
+    }
 
     // On page change: pre-resolve the next few videos' URLs, and load more feed near the end.
     LaunchedEffect(pagerState.currentPage, items.size) {
@@ -225,6 +230,7 @@ fun PlayerScreen(
                         qualityVersion = qualityVersion,
                         dyQuality = dyQuality,
                         showInfo = showInfo && controlsVisible,
+                        pool = pool,
                         onResolved = { playUrls[item.id] = it },
                     )
                 }
@@ -430,33 +436,17 @@ private fun VideoPage(
     qualityVersion: Int,
     dyQuality: String,
     showInfo: Boolean,
+    pool: PlayerPool,
     onResolved: (String) -> Unit,
 ) {
-    val context = LocalContext.current
     // Douyin ships several renditions: honour the chosen one, and if this video lacks it,
     // fall back to the nearest lower rendition (or the lowest) instead of stalling.
     val preferredUrl = remember(item.id, dyQuality) { pickVideoUrl(item, dyQuality) }
     var playUrl by remember(item.id, qualityVersion, dyQuality) { mutableStateOf(preferredUrl) }
 
-    // One player per page, with the request headers each platform's CDN demands.
-    // Buffer targets are tuned for quick starts while swiping, not for long-form playback.
-    val player = remember(item.id) {
-        val dataSourceFactory = DefaultHttpDataSource.Factory()
-            .setUserAgent(DESKTOP_UA) // mobile & ExoPlayer default UAs get 403 from these CDNs
-            .setDefaultRequestProperties(refererFor(item.platform))
-        val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(
-                /* minBufferMs = */ 8_000,
-                /* maxBufferMs = */ 20_000,
-                /* bufferForPlaybackMs = */ 800,
-                /* bufferForPlaybackAfterRebufferMs = */ 1_500,
-            )
-            .build()
-        ExoPlayer.Builder(context)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
-            .setLoadControl(loadControl)
-            .build()
-    }
+    // Players come from a pool: recently watched videos keep their prepared player, so scrolling
+    // back up resumes instantly instead of re-downloading and re-buffering.
+    val player = remember(item.id) { pool.obtain(item) }
 
     // Per-page load state, so a black screen always explains itself.
     var loadState by remember(item.id) { mutableStateOf(LoadState.Loading) }
@@ -475,9 +465,11 @@ private fun VideoPage(
             }
         }
         player.addListener(listener)
+        // A pooled player may already be fully prepared when we scroll back to it.
+        if (player.playbackState == Player.STATE_READY) loadState = LoadState.Ready
         onDispose {
+            // Deliberately NOT released here: the pool owns the player's lifecycle.
             player.removeListener(listener)
-            player.release()
         }
     }
 
@@ -634,6 +626,52 @@ private fun VideoPage(
 }
 
 private enum class LoadState { Loading, Ready, Error }
+
+/**
+ * Keeps a small LRU set of prepared players, keyed by video id.
+ * Size is comfortably larger than the pager's composed window (3 pages) so a player that is
+ * still attached to a composed page is never evicted.
+ */
+class PlayerPool(private val context: android.content.Context, private val maxSize: Int = 7) {
+    private val players = LinkedHashMap<String, ExoPlayer>(16, 0.75f, /* accessOrder = */ true)
+
+    @Synchronized
+    fun obtain(item: VideoItem): ExoPlayer {
+        players[item.id]?.let { return it }
+        val player = buildPlayer(context, item.platform)
+        players[item.id] = player
+        while (players.size > maxSize) {
+            val eldest = players.entries.first()
+            players.remove(eldest.key)
+            eldest.value.release()
+        }
+        return player
+    }
+
+    fun releaseAll() {
+        players.values.forEach { it.release() }
+        players.clear()
+    }
+}
+
+private fun buildPlayer(context: android.content.Context, platform: Platform): ExoPlayer {
+    val dataSourceFactory = DefaultHttpDataSource.Factory()
+        .setUserAgent(DESKTOP_UA) // mobile & ExoPlayer default UAs get 403 from these CDNs
+        .setDefaultRequestProperties(refererFor(platform))
+    // Buffer targets tuned for quick starts while swiping, not for long-form playback.
+    val loadControl = DefaultLoadControl.Builder()
+        .setBufferDurationsMs(
+            /* minBufferMs = */ 8_000,
+            /* maxBufferMs = */ 15_000,
+            /* bufferForPlaybackMs = */ 800,
+            /* bufferForPlaybackAfterRebufferMs = */ 1_500,
+        )
+        .build()
+    return ExoPlayer.Builder(context)
+        .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+        .setLoadControl(loadControl)
+        .build()
+}
 
 /** Numeric part of a rendition label ("720P" -> 720), used for nearest-match fallback. */
 private fun qualityNumber(label: String): Int = label.filter { it.isDigit() }.toIntOrNull() ?: 0
