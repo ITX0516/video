@@ -28,6 +28,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -43,6 +44,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.activity.compose.BackHandler
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -53,6 +56,7 @@ import com.shortfeed.app.data.FeedRepository
 import com.shortfeed.app.data.Platform
 import com.shortfeed.app.data.VideoItem
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /** How the video frame maps onto the screen. Persisted across launches. */
 enum class ScaleMode(val label: String, val resizeMode: Int) {
@@ -119,6 +123,7 @@ fun PlayerScreen(
     var qualityVersion by remember { mutableStateOf(0) }
     // Douyin rendition label ("1080P"…); empty = the feed's own default address.
     var dyQuality by remember { mutableStateOf(prefs.loadDouyinQuality()) }
+    var showInfo by remember { mutableStateOf(false) }
     fun applyQuality(qn: Int) {
         if (qn == quality) return
         quality = qn
@@ -215,6 +220,7 @@ fun PlayerScreen(
                         transform = transform,
                         qualityVersion = qualityVersion,
                         dyQuality = dyQuality,
+                        showInfo = showInfo && controlsVisible,
                         onResolved = { playUrls[item.id] = it },
                     )
                 }
@@ -246,6 +252,8 @@ fun PlayerScreen(
                 showQuality = isBilibili,
                 quality = quality,
                 onQuality = { applyQuality(it) },
+                infoOn = showInfo,
+                onInfoToggle = { showInfo = !showInfo },
                 douyinOptions = currentItem?.variants?.map { it.label }.orEmpty(),
                 douyinQuality = dyQuality,
                 onDouyinQuality = { applyDouyinQuality(it) },
@@ -301,6 +309,8 @@ private fun ControlsPanel(
     showQuality: Boolean,
     quality: Int,
     onQuality: (Int) -> Unit,
+    infoOn: Boolean,
+    onInfoToggle: () -> Unit,
     douyinOptions: List<String>,
     douyinQuality: String,
     onDouyinQuality: (String) -> Unit,
@@ -351,6 +361,9 @@ private fun ControlsPanel(
                 }
                 TextButton(onClick = onFavorite) {
                     Text("★ 收藏", color = Color.White)
+                }
+                TextButton(onClick = onInfoToggle) {
+                    Text(if (infoOn) "隐藏信息" else "信息", color = Color.White)
                 }
                 if (tabSwitch != null) {
                     TextButton(onClick = tabSwitch) {
@@ -407,6 +420,7 @@ private fun VideoPage(
     transform: FrameTransform,
     qualityVersion: Int,
     dyQuality: String,
+    showInfo: Boolean,
     onResolved: (String) -> Unit,
 ) {
     val context = LocalContext.current
@@ -427,8 +441,53 @@ private fun VideoPage(
             .build()
     }
 
+    // Per-page load state, so a black screen always explains itself.
+    var loadState by remember(item.id) { mutableStateOf(LoadState.Loading) }
+    var errorText by remember(item.id) { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
+
     DisposableEffect(item.id) {
-        onDispose { player.release() }
+        val listener = object : Player.Listener {
+            override fun onRenderedFirstFrame() {
+                loadState = LoadState.Ready
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                errorText = error.errorCodeName
+                loadState = LoadState.Error
+            }
+        }
+        player.addListener(listener)
+        onDispose {
+            player.removeListener(listener)
+            player.release()
+        }
+    }
+
+    fun retry() {
+        loadState = LoadState.Loading
+        errorText = ""
+        scope.launch {
+            // The URL may simply have expired: drop the cache and resolve again.
+            repository.clearResolvedUrls()
+            val url = repository.resolvePlayUrl(item)
+            if (url.isNotEmpty()) {
+                if (url == playUrl) {
+                    // Same address: force a fresh prepare, the effect won't re-run on an equal value.
+                    player.prepare()
+                    player.play()
+                } else {
+                    playUrl = url
+                }
+                onResolved(url)
+            } else if (playUrl.isNotEmpty()) {
+                player.prepare()
+                player.play()
+            } else {
+                errorText = "无法获取播放地址"
+                loadState = LoadState.Error
+            }
+        }
     }
 
     // Resolve the direct URL lazily (cached by the repository) when this page becomes active.
@@ -438,6 +497,9 @@ private fun VideoPage(
             if (url.isNotEmpty()) {
                 playUrl = url
                 onResolved(url)
+            } else if (item.playUrl.isEmpty()) {
+                errorText = "无法获取播放地址"
+                loadState = LoadState.Error
             }
         }
     }
@@ -448,6 +510,7 @@ private fun VideoPage(
         if (player.currentMediaItem == null ||
             player.currentMediaItem?.localConfiguration?.uri?.toString() != playUrl
         ) {
+            loadState = LoadState.Loading
             player.setMediaItem(MediaItem.fromUri(playUrl))
             player.prepare()
         }
@@ -482,8 +545,77 @@ private fun VideoPage(
                     clip = true
                 },
         )
+
+        // Loading / failure feedback: a black screen must never be silent.
+        if (active && loadState != LoadState.Ready) {
+            Column(
+                modifier = Modifier.align(Alignment.Center).padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                if (loadState == LoadState.Loading) {
+                    CircularProgressIndicator(color = Color.White)
+                    Text(
+                        text = "加载中…",
+                        color = Color.White,
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 12.dp),
+                    )
+                } else {
+                    Text(
+                        text = "视频加载失败",
+                        color = Color.White,
+                        style = androidx.compose.material3.MaterialTheme.typography.bodyLarge,
+                    )
+                    Text(
+                        text = errorText,
+                        color = Color.White.copy(alpha = 0.7f),
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                    TextButton(onClick = { retry() }) {
+                        Text("重试", color = Color(0xFFD0BCFF))
+                    }
+                    Text(
+                        text = "也可以直接滑到下一条",
+                        color = Color.White.copy(alpha = 0.5f),
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        }
+
+        // Optional video info overlay (toggled from the control panel).
+        if (active && showInfo) {
+            Surface(
+                color = Color.Black.copy(alpha = 0.6f),
+                modifier = Modifier.align(Alignment.BottomStart).padding(16.dp),
+                shape = RoundedCornerShape(8.dp),
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text(
+                        text = item.title.ifBlank { "（无标题）" },
+                        color = Color.White,
+                        style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        text = "${item.author.ifBlank { "未知作者" }} · ${item.platform.name}",
+                        color = Color.White.copy(alpha = 0.8f),
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                    Text(
+                        text = "id: ${item.id}",
+                        color = Color.White.copy(alpha = 0.5f),
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+            }
+        }
     }
 }
+
+private enum class LoadState { Loading, Ready, Error }
 
 private const val DESKTOP_UA =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
