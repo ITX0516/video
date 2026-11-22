@@ -58,6 +58,7 @@ import com.shortfeed.app.Prefs
 import com.shortfeed.app.data.FeedRepository
 import com.shortfeed.app.data.Platform
 import com.shortfeed.app.data.VideoItem
+import com.shortfeed.app.data.douyin.DouyinWebBridge
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -74,6 +75,9 @@ enum class ScaleMode(val label: String, val resizeMode: Int) {
 
 private const val MIN_ZOOM = 1f
 private const val MAX_ZOOM = 3f
+
+/** Douyin's three web feeds. 精选 is what the site opens on; 关注 requires login + follows. */
+private val DOUYIN_TABS = listOf("精选", "推荐", "关注")
 
 /** Bilibili qn codes. 1080P needs a logged-in account to actually be granted. */
 private val QUALITY_OPTIONS = listOf(
@@ -102,7 +106,8 @@ fun PlayerScreen(
     onQualityChange: (Int) -> Unit = {},
     onToggleLike: (VideoItem, String) -> Boolean = { _, _ -> false },
     onToggleFavorite: (VideoItem, String) -> Boolean = { _, _ -> false },
-    onSwitchDouyinTab: (Boolean) -> String? = { null },
+    onSwitchDouyinTab: suspend (String) -> DouyinWebBridge.TabSwitchResult =
+        { DouyinWebBridge.TabSwitchResult(false, null) },
 ) {
     val context = LocalContext.current
     val pool = remember { PlayerPool(context.applicationContext) }
@@ -111,10 +116,13 @@ fun PlayerScreen(
     val items by repository.items.collectAsStateWithLifecycle()
     val activeKey by repository.activeKey.collectAsStateWithLifecycle()
     val pagerState = rememberPagerState(pageCount = { items.size })
+    val scope = rememberCoroutineScope()
 
     var scaleMode by remember { mutableStateOf(ScaleMode.fromKey(prefs.loadScaleMode())) }
     var controlsVisible by remember { mutableStateOf(true) }
-    var douyinFollowing by remember { mutableStateOf(false) }
+    var douyinTab by remember { mutableStateOf("精选") } // the web page's default feed
+    // A tab switch replaces the whole feed, so the pager must start over once the new page lands.
+    var pendingReset by remember { mutableStateOf(false) }
     // One transform for all videos: the zoom/pan you set carries over when you swipe to the next one.
     var transform by remember { mutableStateOf(FrameTransform()) }
     val isDouyin = activeKey == "douyin"
@@ -174,16 +182,47 @@ fun PlayerScreen(
         }
     }
 
+    // After a tab switch the feed restarts: jump back to the first page of the new list.
+    LaunchedEffect(items.size, pendingReset) {
+        if (pendingReset && items.isNotEmpty()) {
+            pagerState.scrollToPage(0)
+            pendingReset = false
+        }
+    }
+
+    // A permanently empty feed must say why instead of spinning forever.
+    var emptyHint by remember { mutableStateOf(false) }
+    LaunchedEffect(items.isEmpty()) {
+        emptyHint = false
+        if (items.isEmpty()) {
+            delay(9_000)
+            emptyHint = true
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
     ) {
         when {
-            items.isEmpty() -> CircularProgressIndicator(
-                modifier = Modifier.align(Alignment.Center),
-                color = Color.White,
-            )
+            items.isEmpty() -> Column(
+                modifier = Modifier.align(Alignment.Center).padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                CircularProgressIndicator(color = Color.White)
+                if (emptyHint) {
+                    Text(
+                        text = "暂时没有内容。\n「关注」需要先登录抖音并且确实有关注的人；\n也可能是页面没加载出来。",
+                        color = Color.White,
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 16.dp),
+                    )
+                    TextButton(onClick = { scope.launch { repository.refresh() } }) {
+                        Text("重试", color = Color(0xFFD0BCFF))
+                    }
+                }
+            }
             else -> VerticalPager(
                 state = pagerState,
                 // Keep neighbouring pages composed so their players are already prepared.
@@ -267,17 +306,29 @@ fun PlayerScreen(
                 douyinOptions = currentItem?.variants?.map { it.label }.orEmpty(),
                 douyinQuality = dyQuality,
                 onDouyinQuality = { applyDouyinQuality(it) },
-                tabSwitch = if (isDouyin) {
-                    {
-                        onSwitchDouyinTab(!douyinFollowing)?.let { label ->
-                            douyinFollowing = !douyinFollowing
-                            showFlash("切换到「$label」")
+                douyinTab = if (isDouyin) douyinTab else null,
+                onDouyinTab = { target ->
+                    scope.launch {
+                        // Stop the current video at once: it is still the *old* feed's video and
+                        // must not keep playing while the page switches (that is what used to
+                        // happen — you heard audio from the previous tab).
+                        pool.pauseAll()
+                        val res = onSwitchDouyinTab(target)
+                        if (!res.clicked) {
+                            currentItem?.let { pool.resume(it.id) }
+                            showFlash("切换失败：页面没找到「$target」")
+                        } else {
+                            douyinTab = target
+                            pendingReset = true
+                            repository.refresh()
+                            val mismatch = !res.activeTab.isNullOrEmpty() && res.activeTab != target
+                            showFlash(
+                                if (mismatch) "点了「$target」，页面仍是「${res.activeTab}」"
+                                else "已切到「$target」",
+                            )
                         }
                     }
-                } else {
-                    null
                 },
-                tabTarget = if (douyinFollowing) "推荐" else "关注",
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(16.dp),
@@ -324,8 +375,8 @@ private fun ControlsPanel(
     douyinOptions: List<String>,
     douyinQuality: String,
     onDouyinQuality: (String) -> Unit,
-    tabSwitch: (() -> Unit)?,
-    tabTarget: String,
+    douyinTab: String?,
+    onDouyinTab: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -375,9 +426,22 @@ private fun ControlsPanel(
                 TextButton(onClick = onInfoToggle) {
                     Text(if (infoOn) "隐藏信息" else "信息", color = Color.White)
                 }
-                if (tabSwitch != null) {
-                    TextButton(onClick = tabSwitch) {
-                        Text("切到$tabTarget", color = Color.White)
+            }
+            if (douyinTab != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "抖音",
+                        color = Color.White,
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 8.dp),
+                    )
+                    DOUYIN_TABS.forEach { tab ->
+                        TextButton(onClick = { onDouyinTab(tab) }) {
+                            Text(
+                                text = tab,
+                                color = if (tab == douyinTab) Color(0xFFD0BCFF) else Color.White,
+                            )
+                        }
                     }
                 }
             }
@@ -469,7 +533,9 @@ private fun VideoPage(
         // A pooled player may already be fully prepared when we scroll back to it.
         if (player.playbackState == Player.STATE_READY) loadState = LoadState.Ready
         onDispose {
-            // Deliberately NOT released here: the pool owns the player's lifecycle.
+            // The pool owns the player's lifecycle, but leaving it playing would keep audio from
+            // an off-screen page alive (e.g. after a feed reset). Pause; the buffer is kept.
+            player.pause()
             player.removeListener(listener)
         }
     }
@@ -653,6 +719,16 @@ class PlayerPool(private val context: android.content.Context, private val maxSi
     fun releaseAll() {
         players.values.forEach { it.release() }
         players.clear()
+    }
+
+    /** Stops audio from every retained player, e.g. while the feed is being replaced. */
+    fun pauseAll() {
+        players.values.forEach { it.pause() }
+    }
+
+    /** Resumes a specific retained player (used when a tab switch turns out to have failed). */
+    fun resume(id: String) {
+        players[id]?.play()
     }
 }
 

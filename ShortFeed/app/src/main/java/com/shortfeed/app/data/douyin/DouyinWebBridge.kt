@@ -11,11 +11,14 @@ import com.shortfeed.app.data.Platform
 import com.shortfeed.app.data.QualityVariant
 import com.shortfeed.app.data.VideoItem
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
 
 /**
  * Bridges the real Douyin website into the native immersive player.
@@ -32,6 +35,10 @@ class DouyinWebBridge(private val activity: Activity) {
 
     private val queue = LinkedBlockingQueue<VideoItem>()
     private val seen = ConcurrentHashMap.newKeySet<String>()
+
+    /** Feeds are switched through the page's own DOM, so stale responses must be discarded. */
+    @Volatile
+    private var acceptAfter = 0L
 
     @SuppressLint("SetJavaScriptEnabled")
     val webView: WebView = WebView(activity).apply {
@@ -89,6 +96,8 @@ class DouyinWebBridge(private val activity: Activity) {
         }
 
     private fun ingest(json: String) {
+        // Drop responses that were already in flight when the feed was switched.
+        if (System.currentTimeMillis() < acceptAfter) return
         val arr = runCatching { JSONObject(json).optJSONArray("aweme_list") }.getOrNull() ?: return
         for (i in 0 until arr.length()) {
             val a = arr.optJSONObject(i) ?: continue
@@ -155,13 +164,29 @@ class DouyinWebBridge(private val activity: Activity) {
         seen.clear()
     }
 
-    /** Switches the page between the 推荐 and 关注 tabs, which makes it fetch a different feed. */
-    fun switchTab(following: Boolean) {
+    /** Outcome of asking the page to switch feeds. */
+    data class TabSwitchResult(val clicked: Boolean, val activeTab: String?)
+
+    /**
+     * Clicks the feed tab whose visible text is exactly [label] (精选 / 推荐 / 关注).
+     *
+     * The site is a virtualised SPA, so the click is best-effort DOM work. Afterwards we read back
+     * which tab the page itself marks as active: if it disagrees with what was requested, the
+     * caller must tell the user rather than silently presenting the old feed as the new one.
+     */
+    suspend fun switchTab(label: String): TabSwitchResult = withContext(Dispatchers.Main) {
+        val clicked = evaluate(clickTabJs(label)).orEmpty().trim('"') == "ok"
+        if (!clicked) return@withContext TabSwitchResult(false, null)
+
+        delay(1_000) // let the SPA route and render
+        val active = evaluate(activeTabJs()).orEmpty().trim('"').ifEmpty { null }
         resetBuffer()
-        val label = if (following) "关注" else "推荐"
-        activity.runOnUiThread {
-            webView.evaluateJavascript(tabJs(label), null)
-        }
+        acceptAfter = System.currentTimeMillis() + 400
+        TabSwitchResult(true, active)
+    }
+
+    private suspend fun evaluate(js: String): String? = suspendCancellableCoroutine { cont ->
+        webView.evaluateJavascript(js) { result -> if (cont.isActive) cont.resume(result) }
     }
 
     /**
@@ -191,21 +216,35 @@ class DouyinWebBridge(private val activity: Activity) {
         else -> url
     }
 
-    /** Clicks the tab whose visible text is exactly [label]. */
-    private fun tabJs(label: String): String = """
+    /** Clicks the tab whose visible text is exactly [label]; returns 'ok' or 'nf'. */
+    private fun clickTabJs(label: String): String = """
         (function(){
           var want = '$label';
+          var norm = function(s){ return (s||'').replace(/\s+/g,''); };
           var all = document.querySelectorAll('span,div,a,li,button');
           for (var i = 0; i < all.length; i++) {
             var el = all[i];
             if (el.children.length > 0) continue;
-            if ((el.innerText || '').trim() !== want) continue;
+            if (norm(el.innerText) !== want) continue;
             if (!el.offsetParent) continue;
             var t = el.closest('[role="tab"],a,button,li') || el;
-            t.click();
-            return 'ok';
+            try { t.click(); return 'ok'; } catch(e) { return 'nf'; }
           }
           return 'nf';
+        })();
+    """
+
+    /** Reads back which of the three feed tabs the page currently marks as active ('' if unknown). */
+    private fun activeTabJs(): String = """
+        (function(){
+          var norm = function(s){ return (s||'').replace(/\s+/g,''); };
+          var names = ['精选','推荐','关注'];
+          var sel = document.querySelectorAll('[aria-selected="true"],[class*="active"],[class*="selected"]');
+          for (var i = 0; i < sel.length; i++) {
+            var t = norm(sel[i].innerText);
+            for (var j = 0; j < names.length; j++) if (t === names[j]) return names[j];
+          }
+          return '';
         })();
     """
 

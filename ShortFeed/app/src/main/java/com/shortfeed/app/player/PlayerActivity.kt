@@ -69,14 +69,12 @@ class PlayerActivity : ComponentActivity() {
                     onToggleFavorite = { item, url ->
                         prefs.toggleFavorite(item.copy(playUrl = url))
                     },
-                    onSwitchDouyinTab = { toFollowing ->
+                    onSwitchDouyinTab = { label ->
                         val bridge = douyinBridge
                         if (bridge != null && repository.activeSource?.platform == Platform.DOUYIN) {
-                            bridge.switchTab(toFollowing)
-                            lifecycleScope.launch { repository.refresh() }
-                            if (toFollowing) "关注" else "推荐"
+                            bridge.switchTab(label)
                         } else {
-                            null
+                            DouyinWebBridge.TabSwitchResult(false, null)
                         }
                     },
                 )
