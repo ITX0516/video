@@ -104,15 +104,17 @@ class BiliSource : VideoSource {
             val bvid = it.optString("bvid")
             val cid = it.optLong("cid")
             if (bvid.isEmpty() || cid == 0L) continue
-            val playUrl = runCatching { resolvePlayUrl(bvid, cid) }.getOrNull() ?: continue
+            // Do NOT resolve the play URL here: the signed CDN URL expires and resolving all 20 at
+            // once is slow and risks rate-limiting. Resolve lazily when the video is up next.
             items += VideoItem(
                 id = bvid,
                 platform = Platform.BILIBILI,
                 title = it.optString("title"),
                 author = it.optJSONObject("owner")?.optString("name").orEmpty(),
                 cover = it.optString("pic"),
-                playUrl = playUrl,
+                playUrl = "",
                 sourceKey = key,
+                playUrlResolver = { resolvePlayUrl(bvid, cid) },
             )
         }
         val nextIdx = data.optInt("fresh_idx", 0).takeIf { it > 0 }?.toString() ?: (idx + 1).toString()

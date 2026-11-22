@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Holds the unified feed for the current active source.
@@ -24,6 +25,9 @@ class FeedRepository(private val sources: List<VideoSource>) {
 
     private val cursors = mutableMapOf<String, String?>()
 
+    /** Cache of lazily-resolved direct video URLs, keyed by item id. */
+    private val resolvedUrls = ConcurrentHashMap<String, String>()
+
     private var activeIndex: Int = 0
         set(value) {
             field = value.coerceIn(0, (sources.size - 1).coerceAtLeast(0))
@@ -37,12 +41,14 @@ class FeedRepository(private val sources: List<VideoSource>) {
         activeIndex = (activeIndex + delta).mod(sources.size)
         _items.value = emptyList()
         cursors.clear()
+        resolvedUrls.clear()
         _activeKey.value = activeSource?.key ?: ""
     }
 
     suspend fun refresh() {
         _items.value = emptyList()
         cursors.clear()
+        resolvedUrls.clear()
         loadMore()
     }
 
@@ -55,6 +61,28 @@ class FeedRepository(private val sources: List<VideoSource>) {
             ?: PageResult(emptyList(), CURSOR_EXHAUSTED)
         cursors[src.key] = page.nextCursor ?: CURSOR_EXHAUSTED
         _items.value = _items.value + page.items
+    }
+
+    /**
+     * Returns a playable URL for [item], resolving lazily via [VideoItem.playUrlResolver] when
+     * the source did not pre-fill [VideoItem.playUrl]. Results are cached for the session.
+     */
+    suspend fun resolvePlayUrl(item: VideoItem): String {
+        resolvedUrls[item.id]?.let { return it }
+        if (item.playUrl.isNotEmpty()) return item.playUrl
+        val url = withContext(Dispatchers.IO) {
+            runCatching { item.playUrlResolver?.invoke() }.getOrNull()
+        }.orEmpty()
+        if (url.isNotEmpty()) resolvedUrls[item.id] = url
+        return url
+    }
+
+    /** Warm the URL cache for the next few videos so swipes don't block on resolution. */
+    suspend fun prefetch(currentPage: Int, lookahead: Int = 2) {
+        val list = _items.value
+        for (i in 1..lookahead) {
+            list.getOrNull(currentPage + i)?.let { resolvePlayUrl(it) }
+        }
     }
 
     companion object {

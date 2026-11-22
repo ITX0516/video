@@ -1,5 +1,7 @@
 package com.shortfeed.app.player
 
+import android.view.ViewGroup.LayoutParams.MATCH_PARENT
+import android.widget.FrameLayout
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -10,7 +12,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -18,12 +22,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
-import android.view.ViewGroup.LayoutParams.MATCH_PARENT
-import android.widget.FrameLayout
 import com.shortfeed.app.data.FeedRepository
+import com.shortfeed.app.data.Platform
 import com.shortfeed.app.data.VideoItem
 
 /**
@@ -39,8 +44,9 @@ fun PlayerScreen(repository: FeedRepository) {
     // (Re)load the active source whenever it changes (volume-key switching) — includes first load.
     LaunchedEffect(activeKey) { repository.loadMore() }
 
-    // Infinite-ish scroll: fetch the next page before reaching the end.
+    // On page change: pre-resolve the next few videos' URLs, and load more feed near the end.
     LaunchedEffect(pagerState.currentPage, items.size) {
+        repository.prefetch(pagerState.currentPage, lookahead = 2)
         if (items.isNotEmpty() && pagerState.currentPage >= items.size - 3) {
             repository.loadMore()
         }
@@ -59,10 +65,10 @@ fun PlayerScreen(repository: FeedRepository) {
             else -> VerticalPager(
                 state = pagerState,
                 modifier = Modifier.fillMaxSize(),
-                beyondViewportPageCount = 1, // preload adjacent video for seamless swipe
+                beyondViewportPageCount = 1, // keep the adjacent page composed for seamless swipe
             ) { page ->
                 items.getOrNull(page)?.let { item ->
-                    VideoPage(item = item, active = page == pagerState.currentPage)
+                    VideoPage(item = item, active = page == pagerState.currentPage, repository = repository)
                 }
             }
         }
@@ -70,28 +76,41 @@ fun PlayerScreen(repository: FeedRepository) {
 }
 
 @Composable
-private fun VideoPage(item: VideoItem, active: Boolean) {
+private fun VideoPage(item: VideoItem, active: Boolean, repository: FeedRepository) {
     val context = LocalContext.current
+    var playUrl by remember(item.id) { mutableStateOf(item.playUrl) }
 
-    // One player per page; released when the page leaves the pager's composition range.
+    // One player per page, with the request headers each platform's CDN demands.
     val player = remember(item.id) {
-        ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(item.playUrl))
-            prepare()
-        }
+        val dataSourceFactory = DefaultHttpDataSource.Factory()
+            .setUserAgent(DESKTOP_UA) // mobile & ExoPlayer default UAs get 403 from these CDNs
+            .setDefaultRequestProperties(refererFor(item.platform))
+        ExoPlayer.Builder(context)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+            .build()
     }
 
     DisposableEffect(item.id) {
         onDispose { player.release() }
     }
 
-    LaunchedEffect(active) {
-        if (active) {
-            player.playWhenReady = true
-            player.play()
-        } else {
-            player.playWhenReady = false
+    // Resolve the direct URL lazily (cached by the repository) when this page becomes active.
+    LaunchedEffect(item.id, active) {
+        if (active && playUrl.isEmpty()) {
+            val url = repository.resolvePlayUrl(item)
+            if (url.isNotEmpty()) playUrl = url
         }
+    }
+
+    // Attach media once a URL is known, and (re)start/pause with page activity.
+    LaunchedEffect(playUrl, active) {
+        if (playUrl.isEmpty()) return@LaunchedEffect
+        if (player.mediaItemCount == 0) {
+            player.setMediaItem(MediaItem.fromUri(playUrl))
+            player.prepare()
+        }
+        player.playWhenReady = active
+        if (active) player.play()
     }
 
     Box(
@@ -111,4 +130,14 @@ private fun VideoPage(item: VideoItem, active: Boolean) {
             modifier = Modifier.fillMaxSize(),
         )
     }
+}
+
+private const val DESKTOP_UA =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+private fun refererFor(platform: Platform): Map<String, String> = when (platform) {
+    Platform.BILIBILI -> mapOf("Referer" to "https://www.bilibili.com")
+    Platform.DOUYIN -> mapOf("Referer" to "https://www.douyin.com")
+    Platform.KUAISHOU -> mapOf("Referer" to "https://www.kuaishou.com")
 }

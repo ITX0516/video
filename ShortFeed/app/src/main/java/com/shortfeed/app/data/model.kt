@@ -12,8 +12,15 @@ data class VideoItem(
     val title: String,
     val author: String,
     val cover: String,
+    /** Already-resolved direct video URL. Empty when the source resolves lazily via [playUrlResolver]. */
     val playUrl: String,
     val sourceKey: String,
+    /**
+     * Optional lazy resolver for the direct video URL. Used when a source prefers not to resolve
+     * every item on a page up-front (e.g. signed CDN URLs expire, and resolving all 20 at once is
+     * wasteful and risks rate-limit). The repository resolves current + next-ahead on demand.
+     */
+    val playUrlResolver: (suspend () -> String?)? = null,
 )
 
 /** A page of feed items plus an opaque cursor for the next page (null = no more). */
