@@ -214,7 +214,6 @@ fun PlayerScreen(
                             } while (event.changes.any { it.pressed })
                         }
                     },
-                beyondViewportPageCount = 1,
             ) { page ->
                 latestItems.getOrNull(page)?.let { item ->
                     VideoPage(
