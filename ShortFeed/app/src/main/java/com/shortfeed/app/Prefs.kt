@@ -21,8 +21,16 @@ class Prefs(context: Context) {
             .apply()
     }
 
+    /** Persisted picture mode name (ScaleMode.name); null = use player default. */
+    fun loadScaleMode(): String? = sp.getString(KEY_SCALE, null)
+
+    fun saveScaleMode(name: String) {
+        sp.edit().putString(KEY_SCALE, name).apply()
+    }
+
     companion object {
         private const val KEY_ENABLED = "enabled"
         private const val KEY_URL = "backend_url"
+        private const val KEY_SCALE = "scale_mode"
     }
 }

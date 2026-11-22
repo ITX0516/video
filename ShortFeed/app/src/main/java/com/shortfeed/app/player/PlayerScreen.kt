@@ -3,11 +3,19 @@ package com.shortfeed.app.player
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.widget.FrameLayout
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -18,7 +26,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
@@ -27,19 +37,37 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import com.shortfeed.app.Prefs
 import com.shortfeed.app.data.FeedRepository
 import com.shortfeed.app.data.Platform
 import com.shortfeed.app.data.VideoItem
 
+/** How the video frame maps onto the screen. Persisted across launches. */
+enum class ScaleMode(val label: String, val resizeMode: Int) {
+    FIT("适应", AspectRatioFrameLayout.RESIZE_MODE_FIT),      // whole frame, letterboxed
+    STRETCH("拉伸", AspectRatioFrameLayout.RESIZE_MODE_FILL), // distort to fill
+    ZOOM("填充", AspectRatioFrameLayout.RESIZE_MODE_ZOOM);    // fill, crop the overflow
+
+    companion object {
+        fun fromKey(key: String?): ScaleMode = entries.firstOrNull { it.name == key } ?: FIT
+    }
+}
+
 /**
  * The entire in-app surface: a full-screen vertical pager of videos.
- * No persistent chrome — no titles, no buttons, no progress bar. Swipe up/down to change videos.
+ * No persistent chrome. A small translucent panel (top-right) picks the picture mode and can be
+ * dismissed with 「隐藏全部 UI」; after that the screen is 100% video and a tap brings it back.
  */
 @Composable
 fun PlayerScreen(repository: FeedRepository) {
+    val context = LocalContext.current
+    val prefs = remember { Prefs(context.applicationContext) }
     val items by repository.items.collectAsStateWithLifecycle()
     val activeKey by repository.activeKey.collectAsStateWithLifecycle()
     val pagerState = rememberPagerState(pageCount = { items.size })
+
+    var scaleMode by remember { mutableStateOf(ScaleMode.fromKey(prefs.loadScaleMode())) }
+    var controlsVisible by remember { mutableStateOf(true) }
 
     // (Re)load the active source whenever it changes (volume-key switching) — includes first load.
     LaunchedEffect(activeKey) { repository.loadMore() }
@@ -68,15 +96,79 @@ fun PlayerScreen(repository: FeedRepository) {
                 beyondViewportPageCount = 1, // keep the adjacent page composed for seamless swipe
             ) { page ->
                 items.getOrNull(page)?.let { item ->
-                    VideoPage(item = item, active = page == pagerState.currentPage, repository = repository)
+                    VideoPage(
+                        item = item,
+                        active = page == pagerState.currentPage,
+                        repository = repository,
+                        scaleMode = scaleMode,
+                    )
                 }
+            }
+        }
+
+        if (controlsVisible) {
+            ControlsPanel(
+                scaleMode = scaleMode,
+                onScaleMode = {
+                    scaleMode = it
+                    prefs.saveScaleMode(it.name)
+                },
+                onHide = { controlsVisible = false },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp),
+            )
+        } else {
+            // Tap anywhere to bring the controls back; until then the screen is pure video.
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) { detectTapGestures { controlsVisible = true } }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ControlsPanel(
+    scaleMode: ScaleMode,
+    onScaleMode: (ScaleMode) -> Unit,
+    onHide: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        color = Color.Black.copy(alpha = 0.55f),
+        contentColor = Color.White,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            ScaleMode.entries.forEach { mode ->
+                TextButton(onClick = { onScaleMode(mode) }) {
+                    Text(
+                        text = mode.label,
+                        color = if (mode == scaleMode) Color(0xFFD0BCFF) else Color.White,
+                    )
+                }
+            }
+            TextButton(onClick = onHide) {
+                Text("隐藏全部 UI", color = Color.White)
             }
         }
     }
 }
 
 @Composable
-private fun VideoPage(item: VideoItem, active: Boolean, repository: FeedRepository) {
+private fun VideoPage(
+    item: VideoItem,
+    active: Boolean,
+    repository: FeedRepository,
+    scaleMode: ScaleMode,
+) {
     val context = LocalContext.current
     var playUrl by remember(item.id) { mutableStateOf(item.playUrl) }
 
@@ -122,13 +214,12 @@ private fun VideoPage(item: VideoItem, active: Boolean, repository: FeedReposito
             factory = { ctx ->
                 PlayerView(ctx).apply {
                     useController = false // <-- the "no UI" guarantee
-                    // FIT = show the WHOLE frame (letterboxed if needed). ZOOM cropped the sides
-                    // of 9:16 videos on tall phones, which read as "picture incomplete".
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    resizeMode = scaleMode.resizeMode
                     layoutParams = FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)
                     this.player = player
                 }
             },
+            update = { view -> view.resizeMode = scaleMode.resizeMode },
             modifier = Modifier.fillMaxSize(),
         )
     }
