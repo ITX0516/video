@@ -87,7 +87,10 @@ class PlayerActivity : ComponentActivity() {
 
     private fun buildSources(enabled: List<String>, baseUrl: String): List<VideoSource> {
         val list = mutableListOf<VideoSource>()
-        if (KEY_BILIBILI in enabled) list += BiliSource()
+        if (KEY_BILIBILI in enabled) {
+            // SESSDATA (if the user logged in) switches the rcmd feed from anonymous to personal.
+            list += BiliSource(com.shortfeed.app.Prefs(this).loadBiliSession())
+        }
         if (KEY_DOUYIN in enabled) {
             if (baseUrl.isNotEmpty()) {
                 // Explicit companion backend → live feed from the self-hosted service.

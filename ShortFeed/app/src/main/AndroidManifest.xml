@@ -33,6 +33,12 @@
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:theme="@style/Theme.ShortFeed.Immersive" />
 
+        <!-- Bilibili login: only to obtain SESSDATA for the personalised recommendation feed. -->
+        <activity
+            android:name=".web.BiliLoginActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:theme="@style/Theme.ShortFeed.Immersive" />
+
     </application>
 
 </manifest>

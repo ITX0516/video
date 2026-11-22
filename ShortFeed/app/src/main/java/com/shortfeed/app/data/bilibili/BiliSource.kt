@@ -17,7 +17,7 @@ import java.util.concurrent.TimeUnit
  * WBI keys are cached and refreshed on risk-control responses, so daily key rotation is handled
  * automatically.
  */
-class BiliSource : VideoSource {
+class BiliSource(private val sessdata: String = "") : VideoSource {
 
     override val key: String = "bilibili"
     override val platform: Platform = Platform.BILIBILI
@@ -32,13 +32,18 @@ class BiliSource : VideoSource {
     private var keysAt: Long = 0L
     private var buvid3: String = ""
 
+    private fun cookie(): String = buildList {
+        if (buvid3.isNotEmpty()) add("buvid3=$buvid3")
+        if (sessdata.isNotEmpty()) add("SESSDATA=$sessdata")
+    }.joinToString("; ")
+
     private fun get(path: String, signed: Boolean = false, params: Map<String, String> = emptyMap()): JSONObject {
         val query = if (signed) WbiSigner.sign(params, imgKey!!, subKey!!) else buildQuery(params)
         val request = Request.Builder()
             .url("$path${if (query.isEmpty()) "" else "?$query"}")
             .header("User-Agent", UA)
             .header("Referer", "https://www.bilibili.com")
-            .apply { if (buvid3.isNotEmpty()) header("Cookie", "buvid3=$buvid3") }
+            .apply { if (cookie().isNotEmpty()) header("Cookie", cookie()) }
             .build()
         client.newCall(request).execute().use { resp ->
             val text = resp.body?.string().orEmpty()

@@ -28,9 +28,17 @@ class Prefs(context: Context) {
         sp.edit().putString(KEY_SCALE, name).apply()
     }
 
+    /** Bilibili SESSDATA cookie, obtained from the in-app login page. Empty when not logged in. */
+    fun loadBiliSession(): String = sp.getString(KEY_BILI_SESS, "").orEmpty()
+
+    fun saveBiliSession(sessdata: String) {
+        sp.edit().putString(KEY_BILI_SESS, sessdata).apply()
+    }
+
     companion object {
         private const val KEY_ENABLED = "enabled"
         private const val KEY_URL = "backend_url"
         private const val KEY_SCALE = "scale_mode"
+        private const val KEY_BILI_SESS = "bili_sessdata"
     }
 }

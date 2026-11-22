@@ -32,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.shortfeed.app.player.PlayerActivity
+import com.shortfeed.app.web.BiliLoginActivity
 import com.shortfeed.app.web.DouyinWebActivity
 
 class MainActivity : ComponentActivity() {
@@ -60,6 +61,9 @@ class MainActivity : ComponentActivity() {
                         onOpenDouyinWeb = {
                             startActivity(Intent(this, DouyinWebActivity::class.java))
                         },
+                        onBiliLogin = {
+                            startActivity(Intent(this, BiliLoginActivity::class.java))
+                        },
                     )
                 }
             }
@@ -74,6 +78,7 @@ private fun PickerScreen(
     initial: FeedConfig,
     onEnter: (FeedConfig) -> Unit,
     onOpenDouyinWeb: () -> Unit,
+    onBiliLogin: () -> Unit,
 ) {
     var bili by remember { mutableStateOf(PlayerActivity.KEY_BILIBILI in initial.enabled) }
     var douyin by remember { mutableStateOf(PlayerActivity.KEY_DOUYIN in initial.enabled) }
@@ -121,9 +126,15 @@ private fun PickerScreen(
             modifier = Modifier.fillMaxWidth(),
         ) { Text("抖音网页版（登录 / 点赞 / 收藏）") }
         Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            onClick = onBiliLogin,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Bilibili 登录（个性化推荐流）") }
+        Spacer(Modifier.height(8.dp))
         Text(
             "提示：播放中用音量键切换内容源；屏幕上没有任何控件。\n" +
                 "抖音沉浸流用你登录的网页会话：先去「抖音网页版」登录，再进沉浸模式。\n" +
+                "B站登录后自动切换为你的账号推荐流（Cookie 只存在本机）。\n" +
                 "网页版登录/点赞/收藏原样可用；若弹出「下载 App」忽略即可。",
             style = MaterialTheme.typography.bodySmall,
         )
