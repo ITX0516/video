@@ -1,6 +1,7 @@
 package com.shortfeed.app.player
 
 import android.content.Context
+import android.webkit.CookieManager
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -9,6 +10,23 @@ import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import com.shortfeed.app.data.Platform
 import java.io.File
+
+/**
+ * Per-player header escalation state.
+ *
+ * Douyin answers 403 to a play request for reasons that are not always the same (missing web
+ * cookies, a UA it dislikes, an unexplained referer). Rather than guessing once, each player keeps
+ * an attempt counter: on a bad HTTP status the player re-prepares and the data source factory
+ * reads the next header profile. No player rebuild, so the surface never blinks.
+ */
+class ProfileStore {
+    @Volatile
+    var attempt: Int = 0
+
+    companion object {
+        const val MAX_ATTEMPT = 2
+    }
+}
 
 /**
  * Process-wide disk cache for video data.
@@ -32,20 +50,46 @@ object VideoCache {
             .also { cache = it }
     }
 
-    /** HTTP upstream with the headers each platform's CDN demands, wrapped in the disk cache. */
-    fun dataSourceFactory(context: Context, platform: Platform): DataSource.Factory {
+    fun dataSourceFactory(
+        context: Context,
+        platform: Platform,
+        store: ProfileStore,
+    ): DataSource.Factory = DataSource.Factory {
+        val attempt = store.attempt
+        val headers = LinkedHashMap<String, String>()
+        val ua = if (attempt == 1) MOBILE_UA else DESKTOP_UA
+        if (attempt < 2) headers.putAll(refererFor(platform))
+        if (platform == Platform.DOUYIN) {
+            // The web feed hands out www.douyin.com/aweme/v1/play URLs that redirect to a CDN and
+            // need the page's own session cookies. Without them: 403.
+            douyinCookie()?.let { headers["Cookie"] = it }
+            if (attempt < 2) headers["Origin"] = "https://www.douyin.com"
+        }
+
         val upstream = DefaultHttpDataSource.Factory()
-            .setUserAgent(DESKTOP_UA) // mobile & ExoPlayer default UAs get 403 from these CDNs
-            .setDefaultRequestProperties(refererFor(platform))
-        return CacheDataSource.Factory()
+            .setUserAgent(ua)
+            .setDefaultRequestProperties(headers)
+            .setAllowCrossProtocolRedirects(true)
+
+        CacheDataSource.Factory()
             .setCache(get(context.applicationContext))
             .setUpstreamDataSourceFactory(upstream)
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+            .createDataSource()
     }
+
+    /** Cookies of the logged-in Douyin web page; empty when not logged in. */
+    private fun douyinCookie(): String? = runCatching {
+        CookieManager.getInstance().getCookie("https://www.douyin.com")
+    }.getOrNull()?.takeIf { it.isNotBlank() }
 
     const val DESKTOP_UA =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+    const val MOBILE_UA =
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 " +
+            "(KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
 
     fun refererFor(platform: Platform): Map<String, String> = when (platform) {
         Platform.BILIBILI -> mapOf("Referer" to "https://www.bilibili.com")

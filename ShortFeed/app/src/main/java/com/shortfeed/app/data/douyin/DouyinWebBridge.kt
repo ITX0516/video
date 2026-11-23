@@ -104,10 +104,13 @@ class DouyinWebBridge(private val activity: Activity) {
             val id = a.optString("aweme_id")
             if (id.isEmpty() || !seen.add(id)) continue
             val video = a.optJSONObject("video") ?: continue
+            // 精选 cards often ship an empty play_addr until the item is "activated"; fall back to
+            // the rendition list, then to the vid-based play endpoint (needs the web cookies).
             val play = fullUrl(
                 video.optJSONObject("play_addr")?.optJSONArray("url_list")?.optString(0).orEmpty()
-            )
-            if (play.isEmpty()) continue // image posts have no play_addr — skip
+            ).ifEmpty { firstBitRateUrl(video) }
+                .ifEmpty { vidPlayUrl(video.optString("vid")) }
+            if (play.isEmpty()) continue // image posts have no video at all — skip
             val cover = fullUrl(
                 video.optJSONObject("cover")?.optJSONArray("url_list")?.optString(0).orEmpty()
             )
@@ -154,6 +157,23 @@ class DouyinWebBridge(private val activity: Activity) {
             .map { QualityVariant(it.key, it.value) }
             .sortedByDescending { it.label.removeSuffix("P").toIntOrNull() ?: 0 }
     }
+
+    private fun firstBitRateUrl(video: JSONObject): String {
+        val arr = video.optJSONArray("bit_rate") ?: return ""
+        for (i in 0 until arr.length()) {
+            val entry = arr.optJSONObject(i) ?: continue
+            val url = fullUrl(
+                entry.optJSONObject("play_addr")?.optJSONArray("url_list")?.optString(0).orEmpty()
+            )
+            if (url.isNotEmpty()) return url
+        }
+        return ""
+    }
+
+    /** Fallback used when the payload withholds every address: the vid-based web play endpoint. */
+    private fun vidPlayUrl(vid: String): String =
+        if (vid.isEmpty()) "" else
+            "https://www.douyin.com/aweme/v1/play/?video_id=$vid&ratio=1080p&line=0"
 
     private fun standardHeight(px: Int): Int =
         STANDARD_HEIGHTS.minByOrNull { kotlin.math.abs(it - px) } ?: px

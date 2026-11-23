@@ -27,6 +27,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.shortfeed.app.Diagnostics
 import com.shortfeed.app.data.Platform
+import com.shortfeed.app.player.ProfileStore
 import com.shortfeed.app.player.VideoCache
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -102,7 +103,9 @@ class LibraryPlayerActivity : ComponentActivity() {
         message.value = "加载中…"
         val p = ExoPlayer.Builder(this)
             .setMediaSourceFactory(
-                DefaultMediaSourceFactory(VideoCache.dataSourceFactory(this, platform)),
+                DefaultMediaSourceFactory(
+                    VideoCache.dataSourceFactory(this, platform, ProfileStore()),
+                ),
             )
             .build()
         p.addListener(object : Player.Listener {

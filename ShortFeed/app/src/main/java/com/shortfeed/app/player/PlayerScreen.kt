@@ -48,6 +48,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -524,9 +525,25 @@ private fun VideoPage(
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                val cause = error.cause
+                Diagnostics.record(
+                    item.platform.name,
+                    item.id,
+                    if (cause is HttpDataSource.InvalidResponseCodeException) {
+                        "${error.errorCodeName} ${cause.responseCode} ${cause.dataSpec.uri.host}"
+                    } else {
+                        error.errorCodeName
+                    },
+                )
+                // A rejected request is usually a header/cookie mismatch: retry with the next
+                // profile (cookie-less → mobile UA → no referer) before declaring failure.
+                if (error.errorCodeName == "ERROR_CODE_IO_BAD_HTTP_STATUS" && pool.escalate(item.id)) {
+                    loadState = LoadState.Loading
+                    player.prepare()
+                    return
+                }
                 errorText = error.errorCodeName
                 loadState = LoadState.Error
-                Diagnostics.record(item.platform.name, item.id, error.errorCodeName)
             }
         }
         player.addListener(listener)
@@ -543,6 +560,7 @@ private fun VideoPage(
     fun retry() {
         loadState = LoadState.Loading
         errorText = ""
+        pool.resetProfile(item.id) // a manual retry starts from the most likely profile again
         scope.launch {
             // The URL may simply have expired: drop the cache and resolve again.
             repository.clearResolvedUrls()
@@ -701,38 +719,62 @@ private enum class LoadState { Loading, Ready, Error }
  * still attached to a composed page is never evicted.
  */
 class PlayerPool(private val context: android.content.Context, private val maxSize: Int = 7) {
-    private val players = LinkedHashMap<String, ExoPlayer>(16, 0.75f, /* accessOrder = */ true)
+    private data class Held(val player: ExoPlayer, val profile: ProfileStore)
+
+    private val players = LinkedHashMap<String, Held>(16, 0.75f, /* accessOrder = */ true)
 
     @Synchronized
     fun obtain(item: VideoItem): ExoPlayer {
-        players[item.id]?.let { return it }
-        val player = buildPlayer(context, item.platform)
-        players[item.id] = player
+        players[item.id]?.let { return it.player }
+        val profile = ProfileStore()
+        val player = buildPlayer(context, item.platform, profile)
+        players[item.id] = Held(player, profile)
         while (players.size > maxSize) {
             val eldest = players.entries.first()
             players.remove(eldest.key)
-            eldest.value.release()
+            eldest.value.player.release()
         }
         return player
     }
 
+    /**
+     * Moves a player to its next header profile after a rejected request.
+     * Returns false when there is nothing left to try.
+     */
+    @Synchronized
+    fun escalate(id: String): Boolean {
+        val held = players[id] ?: return false
+        if (held.profile.attempt >= ProfileStore.MAX_ATTEMPT) return false
+        held.profile.attempt++
+        return true
+    }
+
     fun releaseAll() {
-        players.values.forEach { it.release() }
+        players.values.forEach { it.player.release() }
         players.clear()
     }
 
     /** Stops audio from every retained player, e.g. while the feed is being replaced. */
     fun pauseAll() {
-        players.values.forEach { it.pause() }
+        players.values.forEach { it.player.pause() }
     }
 
     /** Resumes a specific retained player (used when a tab switch turns out to have failed). */
     fun resume(id: String) {
-        players[id]?.play()
+        players[id]?.player?.play()
+    }
+
+    @Synchronized
+    fun resetProfile(id: String) {
+        players[id]?.profile?.attempt = 0
     }
 }
 
-private fun buildPlayer(context: android.content.Context, platform: Platform): ExoPlayer {
+private fun buildPlayer(
+    context: android.content.Context,
+    platform: Platform,
+    profile: ProfileStore,
+): ExoPlayer {
     // Buffer targets tuned for quick starts while swiping, not for long-form playback.
     val loadControl = DefaultLoadControl.Builder()
         .setBufferDurationsMs(
@@ -744,7 +786,7 @@ private fun buildPlayer(context: android.content.Context, platform: Platform): E
         .build()
     return ExoPlayer.Builder(context)
         .setMediaSourceFactory(
-            DefaultMediaSourceFactory(VideoCache.dataSourceFactory(context, platform)),
+            DefaultMediaSourceFactory(VideoCache.dataSourceFactory(context, platform, profile)),
         )
         .setLoadControl(loadControl)
         .build()
