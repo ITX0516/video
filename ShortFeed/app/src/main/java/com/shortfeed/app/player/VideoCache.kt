@@ -24,7 +24,8 @@ class ProfileStore {
     var attempt: Int = 0
 
     companion object {
-        const val MAX_ATTEMPT = 2
+        /** Four profiles: desktop/mobile UA × with/without douyin.com cookies. */
+        const val MAX_ATTEMPT = 3
     }
 }
 
@@ -57,13 +58,15 @@ object VideoCache {
     ): DataSource.Factory = DataSource.Factory {
         val attempt = store.attempt
         val headers = LinkedHashMap<String, String>()
-        val ua = if (attempt == 1) MOBILE_UA else DESKTOP_UA
-        if (attempt < 2) headers.putAll(refererFor(platform))
-        if (platform == Platform.DOUYIN) {
-            // The web feed hands out www.douyin.com/aweme/v1/play URLs that redirect to a CDN and
-            // need the page's own session cookies. Without them: 403.
+        // 0: desktop + cookies, 1: mobile + cookies, 2: desktop no-cookie, 3: mobile no-cookie.
+        val ua = if (attempt == 1 || attempt == 3) MOBILE_UA else DESKTOP_UA
+        if (attempt < 3) headers.putAll(refererFor(platform))
+        if (platform == Platform.DOUYIN && attempt < 2) {
+            // The web feed's play endpoint needs the page's session cookies. But those cookies
+            // must NOT follow the 302 to a CDN host: some nodes reject cross-domain Cookie/Origin
+            // with 403. Later profiles therefore drop both and keep only the browser-like Referer.
             douyinCookie()?.let { headers["Cookie"] = it }
-            if (attempt < 2) headers["Origin"] = "https://www.douyin.com"
+            headers["Origin"] = "https://www.douyin.com"
         }
 
         val upstream = DefaultHttpDataSource.Factory()

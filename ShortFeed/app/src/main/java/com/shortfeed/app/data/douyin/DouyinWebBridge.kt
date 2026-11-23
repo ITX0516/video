@@ -195,13 +195,17 @@ class DouyinWebBridge(private val activity: Activity) {
      * caller must tell the user rather than silently presenting the old feed as the new one.
      */
     suspend fun switchTab(label: String): TabSwitchResult = withContext(Dispatchers.Main) {
+        // Clear BEFORE clicking. Douyin fetches the new tab's first page immediately after the
+        // click; clearing afterwards discarded exactly that response. With few followed videos
+        // no second page ever arrived, so 关注 stayed empty forever even when logged in.
+        resetBuffer()
+        acceptAfter = System.currentTimeMillis()
+
         val clicked = evaluate(clickTabJs(label)).orEmpty().trim('"') == "ok"
         if (!clicked) return@withContext TabSwitchResult(false, null)
 
         delay(1_000) // let the SPA route and render
         val active = evaluate(activeTabJs()).orEmpty().trim('"').ifEmpty { null }
-        resetBuffer()
-        acceptAfter = System.currentTimeMillis() + 400
         TabSwitchResult(true, active)
     }
 

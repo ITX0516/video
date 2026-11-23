@@ -159,6 +159,8 @@ class DouyinWebActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        // Persist the just-acquired session before the bridge WebView reads CookieManager.
+        CookieManager.getInstance().flush()
         webView.destroy()
         super.onDestroy()
     }

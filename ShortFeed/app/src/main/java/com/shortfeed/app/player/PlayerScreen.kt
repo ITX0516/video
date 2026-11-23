@@ -516,6 +516,9 @@ private fun VideoPage(
     // Per-page load state, so a black screen always explains itself.
     var loadState by remember(item.id) { mutableStateOf(LoadState.Loading) }
     var errorText by remember(item.id) { mutableStateOf("") }
+    // A chosen Douyin rendition URL may expire/be rejected while the feed's own play_addr still
+    // works. Remember that we already tried the fallback so a second error doesn't loop.
+    var usePrimaryUrl by remember(item.id, qualityVersion, dyQuality) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     DisposableEffect(item.id) {
@@ -535,10 +538,25 @@ private fun VideoPage(
                         error.errorCodeName
                     },
                 )
+                // A selected rendition can be rejected even though the feed's primary address
+                // still plays. Switch to that address once before burning the header profiles.
+                if (error.errorCodeName == "ERROR_CODE_IO_BAD_HTTP_STATUS" &&
+                    item.platform == Platform.DOUYIN && !usePrimaryUrl &&
+                    item.playUrl.isNotEmpty() && playUrl != item.playUrl
+                ) {
+                    usePrimaryUrl = true
+                    pool.resetProfile(item.id)
+                    loadState = LoadState.Loading
+                    playUrl = item.playUrl
+                    onResolved(item.playUrl)
+                    return
+                }
                 // A rejected request is usually a header/cookie mismatch: retry with the next
-                // profile (cookie-less → mobile UA → no referer) before declaring failure.
+                // profile (mobile UA → no cookie → mobile no-cookie) before declaring failure.
                 if (error.errorCodeName == "ERROR_CODE_IO_BAD_HTTP_STATUS" && pool.escalate(item.id)) {
                     loadState = LoadState.Loading
+                    // Re-set the item so the player builds a fresh DataSource with the new profile.
+                    player.setMediaItem(MediaItem.fromUri(playUrl))
                     player.prepare()
                     return
                 }
